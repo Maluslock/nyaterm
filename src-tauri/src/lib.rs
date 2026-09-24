@@ -34,6 +34,7 @@ use crate::core::{
     CloudSyncManager, QuickCommandsStore, RdpSessionManager, RecordingManager, SessionManager,
     VncSessionManager,
 };
+use crate::core::tmux::TmuxGatewayManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,6 +48,7 @@ pub fn run() {
     let vnc_session_manager = Arc::new(VncSessionManager::new());
     let tunnel_manager = Arc::new(TunnelManager::new());
     let recording_manager = Arc::new(RecordingManager::new());
+    let tmux_gateway_manager = TmuxGatewayManager::new();
     let pending_auth_manager = Arc::new(PendingAuthManager::new());
     let pending_ssh_auth_manager = Arc::new(PendingSshAuthManager::new());
     let pending_ssh_agent_auth_manager = Arc::new(PendingSshAgentAuthManager::new());
@@ -102,6 +104,7 @@ pub fn run() {
         .manage(vnc_session_manager.clone())
         .manage(tunnel_manager.clone())
         .manage(recording_manager.clone())
+        .manage(tmux_gateway_manager.clone())
         .manage(pending_auth_manager.clone())
         .manage(pending_ssh_auth_manager.clone())
         .manage(pending_ssh_agent_auth_manager.clone())
@@ -152,6 +155,10 @@ pub fn run() {
             cmd::app::resolve_local_drop_paths,
             cmd::app::read_background_image_data_url,
             cmd::macos_menu::set_macos_app_menu,
+            cmd::tmux::tmux_gateway_snapshot,
+            cmd::tmux::tmux_gateway_input,
+            cmd::tmux::tmux_gateway_resize,
+            cmd::tmux::tmux_gateway_command,
             cmd::external_open::claim_external_open_requests,
             cmd::updater::check_portable_update,
             cmd::updater::download_portable_update,

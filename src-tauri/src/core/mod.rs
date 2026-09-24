@@ -29,6 +29,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod ssh_config;
 pub(crate) mod terminal_session;
+pub mod tmux;
 pub mod translate;
 pub mod vnc;
 pub mod watcher;

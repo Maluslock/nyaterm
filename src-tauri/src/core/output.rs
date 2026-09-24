@@ -54,6 +54,13 @@ struct FlushResult {
 pub struct SessionOutputCoalescer {
     sink: Arc<OutputSink>,
     flow_control_tx: Option<SessionCommandSender>,
+    /// Optional tmux control-mode gateway.
+    ///
+    /// When present it gets first look at every chunk. Once a session enters
+    /// tmux control mode the gateway consumes the protocol stream here — before
+    /// it is queued, acked, or emitted — because forwarding it would put
+    /// xterm.js into a permanent DCS state.
+    gateway: Option<Arc<crate::core::tmux::TmuxGateway>>,
     /// Serializes all sink emissions so concurrent producer/attach threads
     /// cannot interleave terminal output chunks out of order.
     emit_lock: Mutex<()>,
@@ -72,12 +79,29 @@ impl SessionOutputCoalescer {
         let session_manager = app
             .try_state::<Arc<crate::core::SessionManager>>()
             .map(|state| state.inner().clone());
+        let gateway = session_id.as_deref().and_then(|id| {
+            app.try_state::<Arc<crate::core::tmux::TmuxGatewayManager>>()
+                .map(|manager| manager.gateway_for(id, &app, &flow_control_tx))
+        });
         Self::with_flow_sink(flow_control_tx, move |payload| {
             if let (Some(manager), Some(session_id)) = (&session_manager, &session_id) {
                 manager.append_recent_output(session_id, &payload.data);
             }
             let _ = app.emit(&output_event, &payload);
         })
+        .with_gateway(gateway)
+    }
+
+    /// Attach a tmux gateway. Must be called before the coalescer is shared.
+    pub fn with_gateway(self: Arc<Self>, gateway: Option<Arc<crate::core::tmux::TmuxGateway>>) -> Arc<Self> {
+        match Arc::try_unwrap(self) {
+            Ok(mut coalescer) => {
+                coalescer.gateway = gateway;
+                Arc::new(coalescer)
+            }
+            // Already shared: leave it ungated rather than risk a torn view.
+            Err(shared) => shared,
+        }
     }
 
     #[cfg(test)]
@@ -88,6 +112,7 @@ impl SessionOutputCoalescer {
         Arc::new(Self {
             sink: Arc::new(sink),
             flow_control_tx: None,
+            gateway: None,
             emit_lock: Mutex::new(()),
             state: Mutex::new(OutputState::default()),
         })
@@ -100,6 +125,7 @@ impl SessionOutputCoalescer {
         Arc::new(Self {
             sink: Arc::new(sink),
             flow_control_tx: Some(flow_control_tx),
+            gateway: None,
             emit_lock: Mutex::new(()),
             state: Mutex::new(OutputState::default()),
         })
@@ -139,6 +165,19 @@ impl SessionOutputCoalescer {
     }
 
     pub fn push_owned(self: &Arc<Self>, text: String) {
+        if text.is_empty() {
+            return;
+        }
+
+        // The gateway gets first look. Consumed bytes never enter the queue, so
+        // they are never counted as unacked and never reach the webview.
+        let text = match &self.gateway {
+            Some(gateway) => match gateway.filter(&text) {
+                Some(passthrough) => passthrough,
+                None => return,
+            },
+            None => text,
+        };
         if text.is_empty() {
             return;
         }
