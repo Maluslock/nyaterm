@@ -14,15 +14,26 @@ import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
+import { useCommandHistory } from "@/hooks/useCommandHistory";
 import { useKeywordHighlighter } from "@/hooks/useKeywordHighlighter";
 import { buildTerminalThemeColors } from "@/lib/backgroundImage";
+import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
+import { buildTerminalCommandInput } from "@/lib/sessionInput";
+import {
+  applyTerminalInputData,
+  createTerminalInputState,
+  canSuggestFromTracker,
+} from "@/lib/terminalInputTracker";
+import { applyTmuxPaneInput } from "@/lib/tmuxPaneInput";
 import {
   sendTmuxPaneInput,
   type TmuxPane,
   type TmuxPaneOutput,
   tmuxPaneOutputEvent,
 } from "@/lib/tmuxGateway";
+import { commandStartsSuggestionSuppressingProgram } from "@/lib/commandSuggestionSuppression";
+import CommandSuggestions from "../CommandSuggestions";
 import TerminalGutter from "../TerminalGutter";
 import "@xterm/xterm/css/xterm.css";
 
@@ -57,13 +68,27 @@ export function TmuxPaneTerminal({
   paneIdRef.current = pane.id ?? null;
 
   const { theme } = useTheme();
-  const { appearance, terminal: terminalSettings } = useTerminalAppSettings();
+  const {
+    appearance,
+    interaction,
+    terminal: terminalSettings,
+  } = useTerminalAppSettings();
   const terminalThemeColors = useMemo(
     () => buildTerminalThemeColors(theme.colors.terminal, appearance),
     [appearance, theme],
   );
 
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+
+  const commandSuggestionsEnabled = interaction.command_suggestions_enabled;
+  const commandSuggestionMinChars = interaction.command_suggestion_min_chars;
+  const commandSuggestionMaxChars = interaction.command_suggestion_max_chars;
+
+  // Per-pane input tracking. tmux panes get no shell-integration markers (the
+  // host session's capture runs before the gateway sees anything), so the pane
+  // tracks its own line and registers submissions itself.
+  const inputStateRef = useRef(createTerminalInputState());
+  const suggestionSuppressedRef = useRef(false);
 
   // The gutter is addressed by a synthetic key so it never collides with the
   // host session's own gutter.
@@ -146,6 +171,81 @@ export function TmuxPaneTerminal({
     });
   }, [onCellMetrics]);
 
+  /** Gate the suggestion popup for this pane. */
+  const canShowCommandSuggestions = useCallback(
+    (options?: { allowEmpty?: boolean }) => {
+      const terminal = terminalRef.current;
+      // Full-screen programs own the alternate screen; never suggest there.
+      if (!terminal || terminal.buffer.active.type === "alternate") return false;
+      if (suggestionSuppressedRef.current) return false;
+      const state = inputStateRef.current;
+      if (options?.allowEmpty) {
+        return !state.desynced && !state.multiline;
+      }
+      return canSuggestFromTracker(state);
+    },
+    [],
+  );
+
+  /** Write a chosen suggestion into the pane, replacing the current line. */
+  const applySuggestion = useCallback(
+    (command: string, execute: boolean) => {
+      const paneId = paneIdRef.current;
+      if (!paneId) return;
+
+      const state = inputStateRef.current;
+      const replaceCurrentLine = state.lineRewriteRequired;
+      const input = replaceCurrentLine
+        ? `\u0005\u0015${command}`
+        : `${"\x7f".repeat(state.value.length)}${command}`;
+      const data = buildTerminalCommandInput(input, execute);
+
+      void sendTmuxPaneInput(sessionId, paneId, data).catch(() => {});
+
+      if (execute) {
+        void invoke("register_command_submission", {
+          sessionId,
+          command,
+        }).catch(() => {});
+        if (commandStartsSuggestionSuppressingProgram(command)) {
+          suggestionSuppressedRef.current = true;
+        }
+      }
+
+      // The pane's shell echoes the rewrite; mirror it locally so the tracker
+      // and the popup stay in step with what is on the line. Submitting clears
+      // the line, otherwise the tracker holds the new text.
+      inputStateRef.current = execute
+        ? createTerminalInputState()
+        : applyTerminalInputData(createTerminalInputState(), command);
+    },
+    [sessionId],
+  );
+
+  const {
+    suggestions,
+    selectedIndex,
+    showSuggestions,
+    cursorPosition,
+    triggerSearch,
+    dismissSuggestions,
+    handleSelectSuggestion,
+    handleDeleteSuggestion,
+  } = useCommandHistory(
+    terminalRef,
+    inputStateRef,
+    applySuggestion,
+    canShowCommandSuggestions,
+    commandSuggestionsEnabled,
+    commandSuggestionMinChars,
+    commandSuggestionMaxChars,
+  );
+
+  const syncSuggestions = useCallback(() => {
+    if (canShowCommandSuggestions()) triggerSearch();
+    else dismissSuggestions();
+  }, [canShowCommandSuggestions, dismissSuggestions, triggerSearch]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -164,7 +264,23 @@ export function TmuxPaneTerminal({
     const dataSubscription = terminal.onData((data) => {
       const paneId = paneIdRef.current;
       if (!paneId) return;
+
+      const result = applyTmuxPaneInput(inputStateRef.current, data);
+      inputStateRef.current = result.nextState;
+
+      if (result.submission) {
+        void invoke("register_command_submission", {
+          sessionId,
+          command: result.submission,
+        }).catch(() => {});
+      }
+      // A fresh prompt line means any suppressed full-screen program has exited.
+      if (result.submitted) {
+        suggestionSuppressedRef.current = false;
+      }
+
       void sendTmuxPaneInput(sessionId, paneId, data).catch(() => {});
+      syncSuggestions();
     });
 
     const resizeSubscription = terminal.onResize(() => reportCellMetrics());
@@ -196,7 +312,7 @@ export function TmuxPaneTerminal({
       setTerminalInstance(null);
       lineTimestampsRef.current.clear();
     };
-  }, [sessionId, reportCellMetrics, stampWrittenLines]);
+  }, [sessionId, reportCellMetrics, stampWrittenLines, syncSuggestions]);
 
   // Keyword highlighting is shared with ordinary sessions, including the
   // built-in semantic rule categories.
@@ -258,6 +374,20 @@ export function TmuxPaneTerminal({
         </div>
       )}
       <div ref={containerRef} className="h-full w-full min-h-0 min-w-0" />
+      <CommandSuggestions
+        suggestions={suggestions}
+        visible={
+          commandSuggestionsEnabled &&
+          isActive &&
+          showSuggestions &&
+          canShowCommandSuggestions({ allowEmpty: suggestions.length > 0 })
+        }
+        selectedIndex={selectedIndex}
+        cursorPosition={cursorPosition}
+        onSelect={handleSelectSuggestion}
+        onDismiss={dismissSuggestions}
+        onDeleteHistory={handleDeleteSuggestion}
+      />
     </div>
   );
 }
