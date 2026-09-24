@@ -1,0 +1,14 @@
+[package]
+name = "tmux-cc-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Throwaway Phase 0 probe for spike/tmux-cc-gateway-detection.
+# Drives the real nyaterm output-decode chain; delete once the question is answered.
+
+[dependencies]
+base64 = "0.22"
+encoding_rs = "0.8"
+
+[workspace]

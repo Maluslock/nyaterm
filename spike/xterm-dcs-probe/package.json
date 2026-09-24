@@ -1,0 +1,9 @@
+{
+  "name": "xterm-dcs-probe",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Throwaway Phase 0 probe: how does xterm.js handle tmux -CC's unterminated DCS?",
+  "dependencies": {
+    "@xterm/xterm": "^6.0.0"
+  }
+}

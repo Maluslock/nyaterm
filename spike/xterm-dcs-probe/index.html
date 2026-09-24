@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css" />
+    <style>
+      body { margin: 0; background: #000; }
+      #out { color: #0f0; font: 12px monospace; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="term"></div>
+    <pre id="out">PENDING</pre>
+
+    <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script>
+      // Probe: what does xterm.js do with tmux -CC's control-mode opening?
+      // tmux writes exactly 7 bytes, ESC P 1 0 0 0 p, with NO ST terminator,
+      // then follows with plain-text protocol lines.
+      //
+      // term.write() is ASYNC, so every write is awaited via its callback
+      // before the buffer is read.
+
+      function writeAsync(term, data) {
+        return new Promise((resolve) => term.write(data, resolve));
+      }
+
+      function readBuffer(term) {
+        const buf = term.buffer.active;
+        const lines = [];
+        for (let i = 0; i < buf.length; i++) {
+          const line = buf.getLine(i);
+          lines.push(line ? line.translateToString(true) : "");
+        }
+        while (lines.length && lines[lines.length - 1] === "") lines.pop();
+        return lines.join("\n");
+      }
+
+      async function runCase(name, chunks) {
+        const host = document.createElement("div");
+        document.body.appendChild(host);
+        const term = new Terminal({ cols: 80, rows: 24, scrollback: 100 });
+        term.open(host);
+
+        for (const c of chunks) await writeAsync(term, c);
+        // Sentinel written AFTER the stream: if it renders, nothing swallowed it.
+        await writeAsync(term, "SENTINEL_OK");
+
+        const flat = readBuffer(term);
+        term.dispose();
+        host.remove();
+        return {
+          name,
+          rendered: JSON.stringify(flat),
+          sentinelVisible: flat.includes("SENTINEL_OK"),
+          protocolVisible: flat.includes("%output") || flat.includes("%begin"),
+        };
+      }
+
+      const BOOTSTRAP =
+        "\u001bP1000p%begin 1700000000 1 1\r\n%end 1700000000 1 1\r\n%output %0 hello\r\n";
+
+      const CASES = [
+        ["A. DCS 无 ST + 协议行（真实 tmux -CC 开局）", [BOOTSTRAP]],
+        ["B. 仅 7 字节 DCS", ["\u001bP1000p"]],
+        ["C. DCS + 显式 ST 终止符", ["\u001bP1000p\u001b\\%output %0 hello\r\n"]],
+        ["D. 对照组：纯文本（无 DCS）", ["%output %0 hello\r\n"]],
+      ];
+
+      (async () => {
+        const results = [];
+        for (const [name, chunks] of CASES) results.push(await runCase(name, chunks));
+        const body = results
+          .map(
+            (r) =>
+              `── ${r.name}\n   渲染结果: ${r.rendered}\n` +
+              `   哨兵可见? ${r.sentinelVisible ? "是" : "否"}` +
+              `   | 协议行可见? ${r.protocolVisible ? "是" : "否"}`,
+          )
+          .join("\n\n");
+        document.getElementById("out").textContent =
+          "=== xterm.js 对未终止 DCS 的行为 ===\n\n" + body;
+      })();
+    </script>
+  </body>
+</html>

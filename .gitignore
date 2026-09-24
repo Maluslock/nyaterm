@@ -18,6 +18,11 @@ target/
 src-tauri/binaries/nyaterm-mcp-*
 temp/
 
+# Local reference checkout of WindTerm (not project source).
+# Tailwind's scanner chokes on the non-UTF-8 encoding tables under
+# WindTerm/src/Onigmo/enc, so this must stay out of the content scan.
+WindTerm/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
