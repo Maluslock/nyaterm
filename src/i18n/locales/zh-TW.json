@@ -2941,6 +2941,13 @@
     "selectAll": "全選",
     "translate": "翻譯"
   },
+  "tmux": {
+    "killWindow": "關閉 tmux 視窗",
+    "newWindow": "新增 tmux 視窗",
+    "nextWindow": "下一個 tmux 視窗",
+    "previousWindow": "上一個 tmux 視窗",
+    "waitingForLayout": "正在等待 tmux 佈局…"
+  },
   "translation": {
     "ali": "阿里翻譯",
     "baidu": "百度翻譯",

@@ -2948,6 +2948,13 @@
     "selectAll": "Select All",
     "translate": "Translate"
   },
+  "tmux": {
+    "killWindow": "Kill tmux window",
+    "newWindow": "New tmux window",
+    "nextWindow": "Next tmux window",
+    "previousWindow": "Previous tmux window",
+    "waitingForLayout": "Waiting for tmux layout…"
+  },
   "translation": {
     "ali": "Alibaba",
     "baidu": "Baidu",

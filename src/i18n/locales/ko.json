@@ -2940,6 +2940,13 @@
     "selectAll": "모두 선택",
     "translate": "번역"
   },
+  "tmux": {
+    "killWindow": "tmux 창 닫기",
+    "newWindow": "새 tmux 창",
+    "nextWindow": "다음 tmux 창",
+    "previousWindow": "이전 tmux 창",
+    "waitingForLayout": "tmux 레이아웃 대기 중…"
+  },
   "translation": {
     "ali": "알리바바",
     "baidu": "바이두",

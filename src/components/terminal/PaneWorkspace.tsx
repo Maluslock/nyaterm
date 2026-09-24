@@ -34,6 +34,7 @@ import type {
   TerminalSessionPane,
 } from "@/types/global";
 import XTerminal from "./XTerminal";
+import { TmuxPaneHost } from "./tmux/TmuxPaneHost";
 
 interface PaneWorkspaceProps {
   tab: Tab;
@@ -437,28 +438,30 @@ function PaneNodeView({
           ) : null}
         </div>
       ) : (
-        <PaneXTerminal
-          sessionId={node.sessionId}
-          sessionName={node.name}
-          active={isActive}
-          visible={visible}
-          sessionType={node.type}
-          connectionId={node.connectionId}
-          temporaryConfig={node.temporaryConfig}
-          onReconnected={onReconnected}
-          onDisconnectedCloseRequested={() =>
-            void onDisconnectedCloseRequested?.(tab.id, node.id)
-          }
-          onConnectionError={(sessionId, error) =>
-            onConnectionError?.(tab.id, node.id, sessionId, error)
-          }
-          syncGroups={syncGroups}
-          broadcastToAll={broadcastToAll}
-          sessionInfoById={sessionInfoById}
-          recordingStatus={recordingStatuses?.find((status) => status.sessionId === node.sessionId)}
-          onToggleRecording={onToggleSessionRecording}
-          onSaveTranscript={onSaveSessionTranscript}
-        />
+        <TmuxPaneHost sessionId={node.sessionId}>
+          <PaneXTerminal
+            sessionId={node.sessionId}
+            sessionName={node.name}
+            active={isActive}
+            visible={visible}
+            sessionType={node.type}
+            connectionId={node.connectionId}
+            temporaryConfig={node.temporaryConfig}
+            onReconnected={onReconnected}
+            onDisconnectedCloseRequested={() =>
+              void onDisconnectedCloseRequested?.(tab.id, node.id)
+            }
+            onConnectionError={(sessionId, error) =>
+              onConnectionError?.(tab.id, node.id, sessionId, error)
+            }
+            syncGroups={syncGroups}
+            broadcastToAll={broadcastToAll}
+            sessionInfoById={sessionInfoById}
+            recordingStatus={recordingStatuses?.find((status) => status.sessionId === node.sessionId)}
+            onToggleRecording={onToggleSessionRecording}
+            onSaveTranscript={onSaveSessionTranscript}
+          />
+        </TmuxPaneHost>
       )}
     </div>
   );
