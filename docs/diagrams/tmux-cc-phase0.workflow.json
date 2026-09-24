@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "tmux -CC 原生集成流程与 Phase 0 探测点",
+    "output": "docs/diagrams/tmux-cc-phase0.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "remote", "label": "远端 tmux 服务端" },
+    { "id": "transport", "label": "SSH 流与解码" },
+    { "id": "gateway", "label": "控制协议解析" },
+    { "id": "dispatch", "label": "输出分发" },
+    { "id": "ui", "label": "前端窗格与渲染" },
+    { "id": "interaction", "label": "用户操作回写" },
+    { "id": "exception", "label": "未命中路径", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "enter", "label": "进入控制模式", "fromCol": 0, "toCol": 1 },
+    { "id": "detect", "label": "检测与解析", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "mirror", "label": "镜像与交互", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "spike", "label": "Phase 0 探测范围", "lane": "transport", "fromCol": 2, "toCol": 2, "variant": "emphasis" }
+  ],
+  "mainPath": ["run", "dcs", "decode", "parse", "demux", "mirror", "render"],
+  "nodes": [
+    { "id": "run", "lane": "remote", "col": 0, "type": "external", "label": "tmux -CC", "sublabel": "手动输入" },
+    { "id": "dcs", "lane": "remote", "col": 1, "type": "messagebus", "label": "控制模式", "sublabel": "\\x1bP1000p" },
+    { "id": "decode", "lane": "transport", "col": 2, "type": "backend", "label": "DCS 检测", "sublabel": "ssh/io.rs", "tag": "Phase 0" },
+    { "id": "parse", "lane": "gateway", "col": 3, "type": "backend", "label": "协议解析", "sublabel": "%output" },
+    { "id": "demux", "lane": "dispatch", "col": 4, "type": "backend", "label": "输出解复用", "sublabel": "per pane" },
+    { "id": "mirror", "lane": "ui", "col": 4, "type": "frontend", "label": "布局镜像", "sublabel": "%layout-change" },
+    { "id": "render", "lane": "ui", "col": 5, "type": "frontend", "label": "原生渲染", "sublabel": "pane-id 寻址" },
+    { "id": "writeback", "lane": "interaction", "col": 5, "type": "external", "label": "操作回写", "sublabel": "send-keys" },
+    { "id": "leak", "lane": "exception", "col": 1, "type": "security", "label": "文本泄漏", "sublabel": "当前行为", "tag": "失败" }
+  ],
+  "edges": [
+    { "from": "run", "to": "dcs", "variant": "emphasis", "role": "main" },
+    { "from": "dcs", "to": "decode", "fromSide": "bottom", "toSide": "top", "role": "main" },
+    { "from": "decode", "to": "parse", "fromSide": "bottom", "toSide": "top", "label": "DCS + 协议行", "labelDy": 24, "role": "main" },
+    { "from": "parse", "to": "demux", "fromSide": "bottom", "toSide": "top", "role": "main" },
+    { "from": "demux", "to": "mirror", "fromSide": "bottom", "toSide": "top", "label": "按 pane 分发", "role": "main" },
+    { "from": "mirror", "to": "render", "role": "main" },
+    { "from": "render", "to": "writeback", "fromSide": "bottom", "toSide": "top", "label": "按键 / 拖拽", "role": "branch" },
+    { "from": "decode", "to": "leak", "fromSide": "bottom", "toSide": "top", "label": "未识别或被吞掉", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Phase 0 只回答一个问题",
+      "items": [
+        "\\x1bP1000p 能否活着穿过 TerminalOutputDecoder 与 OscStripper 到达前端",
+        "拦截点放在 core/ssh/io.rs 的哪一层最干净",
+        "拦下之后，原会话能否无损退回普通终端"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "协议不值钱，集成面值钱",
+      "items": [
+        "控制模式协议公开稳定，已有 5 个以上开源实现可对照",
+        "真正的成本是给每一层加第二根身份轴：tmux pane-id",
+        "所有解析会话字节流的功能都要重新指向 per-pane 解码流"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Phase 0 的出口",
+      "items": [
+        "过了：后面是工作量已知的体力活，可按 MVP 分阶段推进",
+        "没过：用 2 天而不是 2 个月知道这件事",
+        "回写路径由 send-keys / resize-pane 命令回到远端 tmux"
+      ]
+    }
+  ]
+}

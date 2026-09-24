@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "tmux -CC 原生集成的改动面",
+    "output": "docs/diagrams/tmux-cc-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "tmux", "type": "external", "label": "远端 tmux -CC", "sublabel": "control mode", "pos": [40, 96], "size": [170, 68] },
+    { "id": "ssh", "type": "backend", "label": "SSH 传输", "sublabel": "core/ssh/io.rs", "pos": [250, 96], "size": [150, 68] },
+    { "id": "decode", "type": "backend", "label": "流解码链", "sublabel": "Decoder · OscStripper", "pos": [440, 96], "size": [190, 68], "tag": "Phase 0" },
+    { "id": "coalescer", "type": "backend", "label": "输出合并", "sublabel": "OutputCoalescer", "pos": [670, 96], "size": [180, 68] },
+    { "id": "xterm", "type": "frontend", "label": "XTerminal", "sublabel": "xterm.js", "pos": [890, 96], "size": [150, 68] },
+
+    { "id": "parsers", "type": "backend", "label": "per-session 解析器", "sublabel": "cwd · 标题 · 历史 · AI", "pos": [140, 250], "size": [240, 72], "tag": "受影响" },
+    { "id": "gateway", "type": "backend", "label": "tmux 网关", "sublabel": "协议解析 · pane 分发", "pos": [440, 250], "size": [190, 72], "tag": "新增" },
+    { "id": "input", "type": "backend", "label": "输入路由", "sublabel": "send-keys -t %N", "pos": [680, 250], "size": [160, 72] },
+
+    { "id": "panetree", "type": "frontend", "label": "窗格树", "sublabel": "window→tab · pane→split", "pos": [440, 388], "size": [200, 72] },
+    { "id": "layout", "type": "frontend", "label": "布局镜像", "sublabel": "拖拽 → resize-pane", "pos": [700, 388], "size": [180, 72] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "现有链路", "wraps": ["tmux", "ssh", "decode", "coalescer", "xterm"] },
+    { "kind": "region", "label": "新增（Phase 1+）", "wraps": ["gateway", "input", "panetree", "layout"] }
+  ],
+  "connections": [
+    { "id": "tmux-ssh", "from": "tmux", "to": "ssh", "label": "DCS + 协议行", "variant": "emphasis", "labelDy": 58 },
+    { "id": "ssh-decode", "from": "ssh", "to": "decode" },
+    { "id": "decode-coalescer", "from": "decode", "to": "coalescer" },
+    { "id": "coalescer-xterm", "from": "coalescer", "to": "xterm", "label": "现状：直通", "labelDy": 58 },
+    { "id": "decode-gateway", "from": "decode", "to": "gateway", "label": "识别 DCS 后切流", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelAt": [613, 207] },
+    { "id": "gateway-parsers", "from": "gateway", "to": "parsers", "label": "重新指向", "variant": "security", "fromSide": "left", "toSide": "right" },
+    { "id": "gateway-input", "from": "gateway", "to": "input", "label": "按键回写", "labelDy": 58 },
+    { "id": "gateway-panetree", "from": "gateway", "to": "panetree", "label": "per-pane 流", "fromSide": "bottom", "toSide": "top", "labelDx": 70 },
+    { "id": "panetree-layout", "from": "panetree", "to": "layout", "label": "布局归属" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Phase 0 只验证一件事",
+      "items": [
+        "\\x1bP1000p 能否穿过流解码链存活到可拦截点",
+        "拦截点就在「流解码链」这一层，不碰窗格树",
+        "模式必须可逆：能进 gateway，也能无损退回普通终端"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "成本几乎全在网关右侧与下方",
+      "items": [
+        "协议解析本身便宜且确定，已有多个开源实现可对照",
+        "真正的成本是给每一层加第二根身份轴：tmux pane-id",
+        "per-session 解析器必须整体改指 per-pane 解码流"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "阶段划分",
+      "items": [
+        "MVP：窗口变原生 tab、pane 变原生 split，布局只读",
+        "Phase 2：快捷键层与 synchronize-panes",
+        "Phase 3：per-pane 特性适配与 detach / attach 重连"
+      ]
+    }
+  ]
+}

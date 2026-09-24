@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "visual-check",
+  "status": "fail",
+  "visualReview": "pending",
+  "artifact": {
+    "path": "/home/user/nyaterm/docs/diagrams/tmux-cc-phase0.html",
+    "sha256": "c0fc81f475e0a09a2526c9e480e74d793c7104d1a87f968b6da9dc4b3340b70c",
+    "bytes": 639144
+  },
+  "state": {
+    "detail": "read",
+    "motion": "still"
+  },
+  "chrome": {
+    "status": "available",
+    "executable": "/usr/bin/google-chrome"
+  },
+  "containment": {
+    "status": "fail",
+    "viewports": []
+  },
+  "captures": {
+    "status": "fail",
+    "screenshots": [],
+    "contactSheet": null
+  },
+  "sidecars": {
+    "receipt": "tmux-cc-phase0.visual-check.json",
+    "contactSheet": "tmux-cc-phase0.visual-check.html"
+  },
+  "error": "Page.loadEventFired: event timed out after 15000ms"
+}
