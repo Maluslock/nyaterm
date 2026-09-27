@@ -438,6 +438,10 @@ jobs:
   r2:
     name: Publish Cloudflare R2 mirror
     needs: [preflight, release]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -454,6 +458,11 @@ jobs:
       TAG: ${{ needs.release.outputs.tag }}
       VERSION: ${{ needs.release.outputs.version }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: Validate R2 configuration
         shell: bash
         run: |
