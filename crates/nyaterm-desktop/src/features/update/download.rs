@@ -190,6 +190,11 @@ fn download_signed_update(
 }
 
 impl NyaTermApp {
+    pub(crate) fn native_update_install_requested(&self, cx: &gpui::App) -> bool {
+        let update = self.update.read(cx);
+        update.install_requested || matches!(update.phase(), super::UpdatePhase::Applying)
+    }
+
     pub(in crate::features) fn start_native_update_download(&mut self, cx: &mut Context<Self>) {
         if !supports_native_install(self.runtime.mode() == nyaterm_core::RuntimeMode::Portable) {
             return;
@@ -280,7 +285,7 @@ impl NyaTermApp {
         let Some(prepared) = prepared else {
             return Ok(());
         };
-        super::install::launch_installer(&prepared)?;
+        super::install::launch_installer(&prepared, &self.settings.summary().language)?;
         self.update.update(cx, |update, cx| {
             update.mark_applying();
             cx.notify();

@@ -12,7 +12,8 @@
     "unavailable": "目前桌面工作階段不支援隱藏至系統匣，視窗已正常最小化。"
 },
   "appShell": {
-    "savingBeforeClose": "正在儲存資料..."
+    "savingBeforeClose": "正在儲存資料...",
+    "preparingUpdate": "正在儲存資料並準備更新..."
   },
   "documentEditor": {
     "fold": "摺疊游標處程式碼",
@@ -3037,6 +3038,11 @@
     "waitingFrame": "正在等待首個桌面畫面…"
   },
   "updater": {
+    "waitingForExit": "正在等待 NyaTerm 結束...",
+    "backingUpInstall": "正在備份目前的安裝...",
+    "applyingInstall": "正在安裝新版本...",
+    "replacingFiles": "正在替換程式檔案...",
+    "startingUpdatedApp": "正在啟動 NyaTerm...",
     "saveEditorsFirst": "安裝更新前請儲存或關閉已修改的檔案。",
     "installFailed": "無法啟動更新安裝程式。",
     "installAndRestart": "安裝並重新啟動",

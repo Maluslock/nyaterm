@@ -12,7 +12,8 @@
     "unavailable": "Tray hiding is unavailable in this desktop session. The window was minimized normally."
 },
   "appShell": {
-    "savingBeforeClose": "Saving changes before closing..."
+    "savingBeforeClose": "Saving changes before closing...",
+    "preparingUpdate": "Saving data and preparing the update..."
   },
   "documentEditor": {
     "fold": "Fold at cursor",
@@ -3084,6 +3085,11 @@
     "waitingFrame": "Waiting for the first desktop frame..."
   },
   "updater": {
+    "waitingForExit": "Waiting for NyaTerm to close...",
+    "backingUpInstall": "Backing up the current installation...",
+    "applyingInstall": "Installing the new version...",
+    "replacingFiles": "Replacing application files...",
+    "startingUpdatedApp": "Starting NyaTerm...",
     "saveEditorsFirst": "Save or close edited files before installing the update.",
     "installFailed": "Could not start the update installer.",
     "installAndRestart": "Install and restart",
