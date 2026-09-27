@@ -22,7 +22,6 @@
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/assets.rs", "max_count": 1, "reason": "Asset table uses a caller-owned horizontal scroll handle with an explicit NyaHorizontalScrollbar overlay."},
     {"path": "crates/nyaterm-desktop/src/features/layout/workspace/surface/tabs.rs", "max_count": 1, "reason": "Session tabs use a caller-owned scroll handle and attach a visible horizontal scrollbar to the non-scrolling parent."},
     {"path": "crates/nyaterm-desktop/src/features/pages/transfers/browser/view.rs", "max_count": 1, "reason": "Browser uses a caller-owned horizontal scrollbar."},
-    {"path": "crates/nyaterm-desktop/src/features/transfers/remote_text_editor.rs", "max_count": 1, "reason": "Dedicated editor owns a manual scrollbar overlay."},
     {"path": "crates/nyaterm-ui/src/widgets.rs", "max_count": 2, "reason": "Reusable widgets own caller-positioned scrollbar overlays."}
   ]
 }
