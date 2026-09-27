@@ -776,6 +776,7 @@
     "somethingWentWrong": "문제가 발생했습니다"
   },
   "fileEditor": {
+    "backupCleanupWarning": "파일은 저장되었지만 백업을 삭제하지 못했습니다: %{path}",
     "bytes": "바이트",
     "clearSearch": "검색 지우기",
     "conflictDesc": "파일을 연 뒤 변경되었습니다. 취소하면 저장하지 않은 편집 내용이 유지됩니다. 변경 사항을 버리고 다시 로드하면 최신 파일로 대체되며, 강제 저장하면 현재 편집 내용으로 최신 파일을 덮어씁니다.",

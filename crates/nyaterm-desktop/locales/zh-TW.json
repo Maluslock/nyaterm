@@ -776,6 +776,7 @@
     "somethingWentWrong": "出現錯誤"
   },
   "fileEditor": {
+    "backupCleanupWarning": "檔案已儲存，但無法刪除備份：%{path}",
     "bytes": "位元組",
     "clearSearch": "清除搜尋",
     "conflictDesc": "檔案在開啟後已被修改。取消會保留尚未儲存的變更；捨棄並重新載入會以最新檔案取代它們；強制儲存會以目前變更覆蓋最新檔案。",

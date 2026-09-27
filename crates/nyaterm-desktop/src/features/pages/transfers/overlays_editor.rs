@@ -35,6 +35,12 @@ fn editor_surface_shell(standalone: bool) -> Stateful<gpui::Div> {
         .when(standalone, |this| this.size_full())
 }
 
+fn editor_dialog_shell() -> Stateful<gpui::Div> {
+    div()
+        .id("transfer-editor-dialog")
+        .on_click(|_, _, cx| cx.stop_propagation())
+}
+
 fn external_sync_button(
     palette: crate::theme::ThemePalette,
     id: &'static str,
@@ -306,6 +312,7 @@ impl NyaTermApp {
                 close_after_save: false,
                 reload_confirm: false,
                 error: None,
+                backup_warning_path: None,
                 focused_field: TransferEditorField::Content,
             });
         let close_confirm = workspace
@@ -358,6 +365,17 @@ impl NyaTermApp {
         let content_preview =
             editor_content_preview(&state.content, &state.search_query, active_match);
         let active_tab_id = state.id.clone();
+        let content_font = self.gpui_terminal_font().font();
+        let host_name = state.session_id.as_deref().and_then(|session_id| {
+            self.session
+                .metadata(session_id)
+                .and_then(|metadata| metadata.source_connection_id.as_deref())
+                .and_then(|connection_id| self.connection_state.connection_by_id(connection_id))
+                .map(|connection| connection.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .or_else(|| self.session.display_name(session_id))
+                .or_else(|| self.session.ssh_host(session_id))
+        });
         let has_native_editor = native_editor.is_some();
         let tabs_menu_open = self.transfer.editor_tabs_menu_is_open() && tabs.len() > 1;
         let mut tab_list = div()
@@ -463,7 +481,6 @@ impl NyaTermApp {
                             .min_w_0()
                             .flex_1()
                             .overflow_hidden()
-                            .font_family(crate::features::shell::gpui_code_font_family())
                             .text_xs()
                             .child(truncate_preview(&label, 28)),
                     )
@@ -537,7 +554,6 @@ impl NyaTermApp {
                             .child(
                                 div()
                                     .overflow_hidden()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
                                     .text_xs()
                                     .text_color(rgb(palette.text))
                                     .child(truncate_preview(&label, 38)),
@@ -545,7 +561,6 @@ impl NyaTermApp {
                             .child(
                                 div()
                                     .overflow_hidden()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
                                     .text_size(px(10.))
                                     .text_color(rgb(palette.text_muted))
                                     .child(truncate_preview(&tab.remote_path, 58)),
@@ -614,10 +629,12 @@ impl NyaTermApp {
             .items_center()
             .justify_center()
             .track_focus(self.transfer.editor_focus())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.transfer.close_editor_tabs_menu();
-                window.focus(this.transfer.editor_focus(), cx);
-                cx.notify();
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if !standalone {
+                    this.transfer.close_editor_tabs_menu();
+                    window.focus(this.transfer.editor_focus(), cx);
+                    cx.notify();
+                }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.transfer.editor_focus().is_focused(window) {
@@ -626,8 +643,7 @@ impl NyaTermApp {
                 }
             }))
             .child(
-                div()
-                    .id(SharedString::from("transfer-editor-dialog"))
+                editor_dialog_shell()
                     .when(standalone, |this| this.size_full())
                     .when(!standalone, |this| {
                         this.w(px(780.))
@@ -654,10 +670,34 @@ impl NyaTermApp {
                             .px_3()
                             .flex()
                             .items_center()
-                            .justify_end()
+                            .justify_between()
                             .border_b_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.surface))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .when_some(host_name, |this, name| {
+                                        let tooltip_name = name.clone();
+                                        this.child(
+                                            div()
+                                                .id("transfer-editor-host-badge")
+                                                .max_w(px(180.))
+                                                .truncate()
+                                                .px_2()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(rgb(palette.surface_elevated))
+                                                .text_xs()
+                                                .tooltip(move |window, cx| {
+                                                    NyaTooltip::new(tooltip_name.clone())
+                                                        .build(window, cx)
+                                                })
+                                                .child(name),
+                                        )
+                                    }),
+                            )
                             .child(
                                 div()
                                     .flex_none()
@@ -745,6 +785,20 @@ impl NyaTermApp {
                                 .child(error),
                         )
                     })
+                    .when_some(state.backup_warning_path.clone(), |this, backup_path| {
+                        this.child(
+                            div()
+                                .flex_none()
+                                .border_b_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.surface_elevated))
+                                .px_3()
+                                .py_2()
+                                .text_xs()
+                                .text_color(rgb(palette.text))
+                                .child(t!("fileEditor.backupCleanupWarning", path = backup_path)),
+                        )
+                    })
                     .child(
                         div()
                             .id(SharedString::from("transfer-editor-content"))
@@ -770,7 +824,7 @@ impl NyaTermApp {
                             })
                             .when(!has_native_editor, |this| {
                                 this.p_3()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
+                                    .font(content_font)
                                     .text_xs()
                                     .text_color(if state.loading {
                                         rgb(palette.text_muted)
@@ -805,7 +859,6 @@ impl NyaTermApp {
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
                                     .text_size(px(11.))
                                     .text_color(rgb(palette.text_muted))
                                     .child(format!(
@@ -815,7 +868,6 @@ impl NyaTermApp {
                             .child(
                                 div()
                                     .flex_none()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
                                     .text_size(px(11.))
                                     .text_color(rgb(palette.text_muted))
                                     .child(format!(
@@ -1053,7 +1105,7 @@ mod tests {
         div, point, px,
     };
 
-    use super::editor_surface_shell;
+    use super::{editor_dialog_shell, editor_surface_shell};
 
     struct EditorWindowLayoutFixture {
         header_clicks: Arc<AtomicUsize>,
@@ -1104,5 +1156,54 @@ mod tests {
         assert_eq!(surface.top(), header.bottom());
         cx.simulate_click(point(px(20.), px(20.)), Modifiers::default());
         assert_eq!(header_clicks.load(Ordering::SeqCst), 1);
+    }
+
+    struct EditorFocusBoundaryFixture {
+        shell_clicks: Arc<AtomicUsize>,
+        content_clicks: Arc<AtomicUsize>,
+    }
+
+    impl Render for EditorFocusBoundaryFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let shell_clicks = self.shell_clicks.clone();
+            let content_clicks = self.content_clicks.clone();
+            div()
+                .id("editor-focus-boundary-shell")
+                .size_full()
+                .on_click(move |_, _, _| {
+                    shell_clicks.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(
+                    editor_dialog_shell().size_full().child(
+                        div()
+                            .id("editor-content-click-target")
+                            .size_full()
+                            .debug_selector(|| "editor-content-click-target".to_string())
+                            .on_click(move |_, _, _| {
+                                content_clicks.fetch_add(1, Ordering::SeqCst);
+                            }),
+                    ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn editor_content_click_does_not_reach_shell_focus_handler(cx: &mut TestAppContext) {
+        let shell_clicks = Arc::new(AtomicUsize::new(0));
+        let content_clicks = Arc::new(AtomicUsize::new(0));
+        let fixture = EditorFocusBoundaryFixture {
+            shell_clicks: shell_clicks.clone(),
+            content_clicks: content_clicks.clone(),
+        };
+        let (_, cx) = cx.add_window_view(|_, _| fixture);
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("editor-content-click-target").unwrap();
+        cx.simulate_click(bounds.center(), Modifiers::default());
+        assert_eq!(content_clicks.load(Ordering::SeqCst), 1);
+        assert_eq!(shell_clicks.load(Ordering::SeqCst), 0);
     }
 }

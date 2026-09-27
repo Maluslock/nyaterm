@@ -776,6 +776,7 @@
     "somethingWentWrong": "Une erreur s'est produite"
   },
   "fileEditor": {
+    "backupCleanupWarning": "Fichier enregistré, mais la sauvegarde n'a pas pu être supprimée : %{path}",
     "bytes": "octets",
     "clearSearch": "Effacer la recherche",
     "conflictDesc": "Le fichier distant a changé après que vous l'avez ouvert. Rechargez pour conserver la version distante, ou forcez l'enregistrement pour l'écraser.",

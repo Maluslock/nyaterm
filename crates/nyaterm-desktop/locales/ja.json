@@ -778,6 +778,7 @@
     "somethingWentWrong": "問題が発生しました"
   },
   "fileEditor": {
+    "backupCleanupWarning": "ファイルは保存されましたが、バックアップを削除できませんでした: %{path}",
     "bytes": "バイト",
     "clearSearch": "検索をクリア",
     "conflictDesc": "開いた後にリモートファイルが変更されました。再読み込みしてリモート版を保持するか、強制保存して上書きしてください。",

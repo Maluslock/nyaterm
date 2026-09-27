@@ -966,6 +966,9 @@ impl NyaTermApp {
                         TransferEditorSaveOutcome::Saved => {
                             format!("remote text file saved: {remote_path}")
                         }
+                        TransferEditorSaveOutcome::SavedWithWarning(backup_path) => {
+                            t!("fileEditor.backupCleanupWarning", path = backup_path).to_string()
+                        }
                         TransferEditorSaveOutcome::Conflict => {
                             format!("remote text save conflict: {remote_path}")
                         }
