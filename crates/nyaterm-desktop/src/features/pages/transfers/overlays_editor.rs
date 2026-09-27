@@ -6,7 +6,7 @@ use gpui::{
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_transport::RemoteTextGeneration;
-use nyaterm_ui::NyaScrollable;
+use nyaterm_ui::{NyaScrollable, NyaTooltip};
 
 use crate::features::transfers::RemoteTextEditor;
 use crate::features::view_widgets::full_window_input_layer;
@@ -405,6 +405,7 @@ impl NyaTermApp {
                 base_label.to_string()
             };
             let tab_group_name = SharedString::from(format!("transfer-editor-tab-group-{index}"));
+            let tooltip_path = tab.remote_path.clone();
             tab_list = tab_list.child(
                 div()
                     .id(SharedString::from(format!("transfer-editor-tab-{index}")))
@@ -431,6 +432,9 @@ impl NyaTermApp {
                     })
                     .cursor_pointer()
                     .hover(|this| this.bg(rgb(palette.hover)).text_color(rgb(palette.text)))
+                    .tooltip(move |window, cx| {
+                        NyaTooltip::new(tooltip_path.clone()).build(window, cx)
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_transfer_editor_tab(&tab_id, cx);
                     }))
@@ -650,21 +654,10 @@ impl NyaTermApp {
                             .px_3()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .gap_2()
+                            .justify_end()
                             .border_b_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.surface))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .font_family(crate::features::shell::gpui_code_font_family())
-                                    .text_xs()
-                                    .text_color(rgb(palette.text_muted))
-                                    .child(truncate_preview(&state.remote_path, 96)),
-                            )
                             .child(
                                 div()
                                     .flex_none()

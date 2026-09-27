@@ -154,7 +154,7 @@ fn window_control_button_with_area(
         .on_click(on_click)
 }
 
-fn toggle_child_window_zoom(window: &mut Window) {
+fn toggle_child_window_zoom(window: &mut Window, _cx: &mut App) {
     #[cfg(target_os = "windows")]
     if window.is_maximized()
         && let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window)
@@ -166,6 +166,9 @@ fn toggle_child_window_zoom(window: &mut Window) {
                 windows_sys::Win32::UI::WindowsAndMessaging::SW_RESTORE,
             );
         }
+        // The native restore can complete before GPUI's queued resize callback.
+        // Synchronize its viewport now and force a full redraw of the child window.
+        window.bounds_changed(_cx);
         return;
     }
 
@@ -261,7 +264,7 @@ pub(in crate::features) fn child_window_header(
                             "icons/window/maximize.svg"
                         },
                         WindowControlArea::Max,
-                        |_, window, _| toggle_child_window_zoom(window),
+                        |_, window, cx| toggle_child_window_zoom(window, cx),
                     ))
                 })
                 .when(!cfg!(target_os = "macos"), |this| {

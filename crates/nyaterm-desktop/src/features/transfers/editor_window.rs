@@ -55,7 +55,7 @@ impl Render for RemoteFileEditorWindow {
             return div().size_full().into_any_element();
         }
 
-        let (palette, font, font_size, title, active_tab, tab_ids) =
+        let (palette, font, font_size, window_title, active_tab, tab_ids) =
             self.app.read_with(cx, |app, _| {
                 let workspace = app
                     .transfer
@@ -108,7 +108,7 @@ impl Render for RemoteFileEditorWindow {
                 window.focus(&editor.read(cx).focus_handle(cx), cx);
             }
         }
-        window.set_window_title(&title);
+        window.set_window_title(&window_title);
         let cursor_position = editor.read(cx).cursor_position(cx);
         let content = self.app.update(cx, |app, cx| {
             app.transfer_editor_window_view(editor, cursor_position, cx)
@@ -139,8 +139,8 @@ impl Render for RemoteFileEditorWindow {
             .text_size(px(font_size))
             .child(child_window_header(
                 palette,
-                title,
-                Some("icons/files.svg"),
+                t!("fileEditor.title").to_string(),
+                Some("icons/edit.svg"),
                 self.chrome,
                 window,
                 move |_, window, cx| header_close(window, cx),
