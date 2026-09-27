@@ -454,6 +454,11 @@ jobs:
       TAG: ${{ needs.release.outputs.tag }}
       VERSION: ${{ needs.release.outputs.version }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: Validate R2 configuration
         shell: bash
         run: |
