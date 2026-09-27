@@ -438,6 +438,10 @@ jobs:
   r2:
     name: Publish Cloudflare R2 mirror
     needs: [preflight, release]
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
