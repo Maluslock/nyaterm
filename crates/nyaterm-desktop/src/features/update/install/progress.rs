@@ -104,7 +104,7 @@ pub(super) fn run(
         crate::i18n::apply_locale(language);
     }
     let (tx, rx) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
+    let worker = crate::thread_owner::spawn_joinable("nyaterm-update", move || {
         let mut report = |stage| {
             let _ = tx.send(Event::Stage(stage));
         };
@@ -113,7 +113,8 @@ pub(super) fn run(
                 .unwrap_or_else(|_| Err("update helper panicked".to_string()));
         let _ = tx.send(Event::Finished(result.clone()));
         result
-    });
+    })
+    .map_err(|error| format!("failed to start update helper: {error}"))?;
 
     if i18n_ready {
         let title = wide("NyaTerm");
