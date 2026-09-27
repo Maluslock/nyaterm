@@ -39,10 +39,12 @@ pub(super) fn transfer_browser_parent_entry_row(
         .bg(gpui::rgba(0x00000000))
         .cursor_pointer()
         .hover(|this| this.bg(rgb(palette.hover)))
-        .on_click(cx.listener(|panel, _: &ClickEvent, window, cx| {
-            panel.with_app(cx, |this, cx| {
-                this.open_transfer_parent_directory(window, cx);
-            })
+        .on_click(cx.listener(|panel, event: &ClickEvent, window, cx| {
+            if event.click_count() >= 2 && !event.modifiers().modified() {
+                panel.with_app(cx, |this, cx| {
+                    this.open_transfer_parent_directory(window, cx);
+                });
+            }
         }))
         .on_mouse_down(
             MouseButton::Right,

@@ -121,7 +121,6 @@ pub(in crate::features) struct TransferPanel {
     /// wants it. The panel decides *when to ask*; the app still owns the cwd itself
     /// and every mutation of it, reached through an event-time hop.
     cwd_clock: Option<gpui::Task<()>>,
-    toolbar_more_open: bool,
     #[cfg(test)]
     paint_count: usize,
     #[cfg(test)]
@@ -134,7 +133,6 @@ impl TransferPanel {
             app,
             snapshot: None,
             cwd_clock: None,
-            toolbar_more_open: false,
             #[cfg(test)]
             paint_count: 0,
             #[cfg(test)]
@@ -223,19 +221,6 @@ impl TransferPanel {
     /// A weak handle for a deferred callback. Render must not use it.
     pub(in crate::features::pages::transfers) fn app_handle(&self) -> WeakEntity<NyaTermApp> {
         self.app.clone()
-    }
-
-    pub(in crate::features::pages::transfers) fn toolbar_more_open(&self) -> bool {
-        self.toolbar_more_open
-    }
-
-    pub(in crate::features::pages::transfers) fn set_toolbar_more_open(
-        &mut self,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.toolbar_more_open = open;
-        cx.notify();
     }
 
     #[cfg(test)]
