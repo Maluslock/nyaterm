@@ -6,7 +6,7 @@ use gpui::{
 };
 use nyaterm_core::truncate_preview;
 use nyaterm_transport::RemoteTextGeneration;
-use nyaterm_ui::{NyaScrollable, NyaTooltip};
+use nyaterm_ui::{NyaScrollable, NyaTag, NyaTooltip};
 
 use crate::features::transfers::RemoteTextEditor;
 use crate::features::view_widgets::full_window_input_layer;
@@ -678,23 +678,28 @@ impl NyaTermApp {
                                 div()
                                     .min_w_0()
                                     .flex_1()
+                                    .flex()
                                     .when_some(host_name, |this, name| {
                                         let tooltip_name = name.clone();
                                         this.child(
                                             div()
                                                 .id("transfer-editor-host-badge")
+                                                .min_w_0()
                                                 .max_w(px(180.))
-                                                .truncate()
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded_sm()
-                                                .bg(rgb(palette.surface_elevated))
-                                                .text_xs()
+                                                .flex()
                                                 .tooltip(move |window, cx| {
                                                     NyaTooltip::new(tooltip_name.clone())
                                                         .build(window, cx)
                                                 })
-                                                .child(name),
+                                                .child(
+                                                    NyaTag::secondary()
+                                                        .min_w_0()
+                                                        .max_w(px(180.))
+                                                        .rounded(px(3.))
+                                                        .child(
+                                                            div().min_w_0().truncate().child(name),
+                                                        ),
+                                                ),
                                         )
                                     }),
                             )
