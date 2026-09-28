@@ -59,16 +59,26 @@ echo "== verify =="
 probe=$(ls dist/assets/*.js | head -1 | xargs basename)
 grep -aq -- "$probe" "$EXE" || { echo "FATAL: frontend assets not embedded ($probe missing)"; exit 1; }
 grep -aq -- "tmux control mode detected" "$EXE" || { echo "FATAL: tmux gateway strings missing"; exit 1; }
-if objdump -p "$EXE" | grep -qiE "DLL Name: (vcruntime|msvcp|ucrtbase|api-ms-win-crt)"; then
+grep -aq -- "tmux-cc-test" "$EXE" || { echo "FATAL: build tag missing"; exit 1; }
+# Note: never pipe objdump into `grep -q` — grep exits early, objdump takes SIGPIPE
+# and `set -o pipefail` turns that into a 141 that aborts the script.
+objdump -p "$EXE" > "$EXE.imports.txt"
+if grep -qiE "DLL Name: (vcruntime|msvcp|ucrtbase|api-ms-win-crt)" "$EXE.imports.txt"; then
   echo "FATAL: dynamic CRT imports found; crt-static did not apply"
   exit 1
 fi
-echo "ok: assets embedded ($probe), tmux gateway present, static CRT"
+rm -f "$EXE.imports.txt"
+echo "ok: assets embedded ($probe), tmux gateway present, build tag present, static CRT"
 
 echo "== 4/4 package =="
 mkdir -p "$OUT"
 cp "$EXE" "$OUT/nyaterm.exe"
 cp "$SIDECAR" "$OUT/nyaterm-mcp.exe"
+# portable.flag switches the app to self-contained mode: its own identifier (so a
+# running installed build cannot swallow the launch through single-instance), its
+# own config and logs under <exe_dir>/data, and an unshared database file. That is
+# what makes a hand-built test package distinguishable from an installed release.
+: > "$OUT/portable.flag"
 (
   cd "$REPO/dist-windows"
   rm -f nyaterm-windows-x64.zip
