@@ -42,7 +42,8 @@ use crate::features::{
     NyaTermApp, icons::CONNECTION_ICON_OPTIONS, icons::DEFAULT_CONNECTION_ICON,
     icons::resolve_connection_icon, text_inputs::ORDINARY_INPUT_SHELL_PADDING_X_PX,
     text_inputs::ordinary_input_focus_ring, text_inputs::ordinary_input_shell_border_color,
-    view_widgets::modal_dialog_shell, view_widgets::themed_icon,
+    view_widgets::full_window_input_layer, view_widgets::modal_dialog_shell,
+    view_widgets::themed_icon,
 };
 use crate::models::{
     ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorSelect,
@@ -1702,10 +1703,7 @@ impl NyaTermApp {
             }
         }
 
-        div()
-            .id("connection-editor-credential-overlay")
-            .absolute()
-            .inset_0()
+        full_window_input_layer("connection-editor-credential-overlay")
             .bg(rgba(0x00000088))
             .flex()
             .items_center()
@@ -1758,25 +1756,35 @@ impl NyaTermApp {
                                 )),
                             )
                             .child(
-                                nyaterm_ui::NyaIconButton::new(
-                                    "connection-editor-credential-close",
-                                    "icons/close.svg",
-                                )
-                                .tooltip(t!("common.close"))
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.set_connection_editor_credential_overlay(None, cx);
-                                        let select = match overlay {
-                                            ConnectionEditorCredentialOverlay::Passwords => {
-                                                ConnectionEditorSelect::SavedPassword
-                                            }
-                                            ConnectionEditorCredentialOverlay::Keys => {
-                                                ConnectionEditorSelect::SshKey
-                                            }
-                                        };
-                                        this.focus_connection_editor_select(select, window, cx);
-                                    },
-                                )),
+                                div()
+                                    .debug_selector(|| {
+                                        "connection-editor-credential-close".to_string()
+                                    })
+                                    .child(
+                                        nyaterm_ui::NyaIconButton::new(
+                                            "connection-editor-credential-close",
+                                            "icons/close.svg",
+                                        )
+                                        .tooltip(t!("common.close"))
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.set_connection_editor_credential_overlay(
+                                                    None, cx,
+                                                );
+                                                let select = match overlay {
+                                                ConnectionEditorCredentialOverlay::Passwords => {
+                                                    ConnectionEditorSelect::SavedPassword
+                                                }
+                                                ConnectionEditorCredentialOverlay::Keys => {
+                                                    ConnectionEditorSelect::SshKey
+                                                }
+                                            };
+                                                this.focus_connection_editor_select(
+                                                    select, window, cx,
+                                                );
+                                            }),
+                                        ),
+                                    ),
                             ),
                     )
                     .child(div().flex_1().min_h_0().overflow_y_scrollbar().child(rows)),
@@ -2730,6 +2738,7 @@ fn connection_editor_footer_button(
     };
     let button = div()
         .id(id)
+        .debug_selector(move || id.to_string())
         .h(px(36.))
         .px_4()
         .flex()
@@ -2788,8 +2797,8 @@ mod tests {
     use std::path::Path;
 
     use gpui::{
-        AppContext as _, Entity, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-        Styled as _, TestAppContext, VisualTestContext, div, px,
+        AppContext as _, Entity, InteractiveElement as _, IntoElement, Modifiers,
+        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, px,
     };
     use nyaterm_core::{AppRuntime, Group, RuntimeMode};
 
@@ -2798,9 +2807,9 @@ mod tests {
     use crate::features::NyaTermApp;
     use crate::features::selects::PENDING_CONNECTION_GROUP_VALUE;
     use crate::models::{
-        ConnectionEditorAdvancedTab, ConnectionEditorAdvancedVisibility, ConnectionEditorField,
-        ConnectionEditorPasswordSource, ConnectionEditorState, ConnectionEditorTelnetTab,
-        ConnectionKindTab,
+        ConnectionEditorAdvancedTab, ConnectionEditorAdvancedVisibility,
+        ConnectionEditorCredentialOverlay, ConnectionEditorField, ConnectionEditorPasswordSource,
+        ConnectionEditorState, ConnectionEditorTelnetTab, ConnectionKindTab,
     };
     use crate::test_support::TestConfigDir;
 
@@ -3111,6 +3120,60 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec![Some("child".to_string())]);
+    }
+
+    #[gpui::test]
+    fn vnc_credential_manager_blocks_editor_clicks_and_closes(cx: &mut TestAppContext) {
+        let test_dir = TestConfigDir::new("nyaterm-vnc-credential-overlay");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.set_connection_editor_kind(ConnectionKindTab::Vnc, cx);
+                app.set_connection_editor_password_source(
+                    ConnectionEditorPasswordSource::Saved,
+                    cx,
+                );
+                app.set_connection_editor_credential_overlay(
+                    Some(ConnectionEditorCredentialOverlay::Passwords),
+                    cx,
+                );
+            });
+        });
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.update(|_, cx| app.read(cx).connection_state.editor_credential_overlay()),
+            Some(ConnectionEditorCredentialOverlay::Passwords)
+        );
+
+        let editor_close = vcx
+            .debug_bounds("connection-editor-close")
+            .expect("editor close button should render under the overlay");
+        vcx.simulate_click(editor_close.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.update(|_, cx| app.read(cx).connection_state.editor_credential_overlay()),
+            Some(ConnectionEditorCredentialOverlay::Passwords)
+        );
+        assert!(vcx.update(|_, cx| {
+            app.read(cx)
+                .connection_state
+                .active_editor_draft()
+                .is_some()
+        }));
+
+        let overlay_close = vcx
+            .debug_bounds("connection-editor-credential-close")
+            .expect("credential manager close button should render");
+        vcx.simulate_click(overlay_close.center(), Modifiers::default());
+        draw_editor(&app, vcx);
+        assert_eq!(
+            vcx.update(|_, cx| app.read(cx).connection_state.editor_credential_overlay()),
+            None
+        );
+        assert!(
+            vcx.debug_bounds("connection-editor-credential-overlay")
+                .is_none()
+        );
     }
 
     #[test]
