@@ -1073,17 +1073,14 @@ fn terminal_selected_text_from_line_source<'a>(
         let col_end = col_end_excl.min(cells.len().max(col_start));
         let col_start = col_start.min(col_end);
         let slice = terminal_text_cell_slice(&cells, col_start, col_end);
-        if !first_line && !wrapped {
+        let slice = slice.trim_end();
+        let empty_endpoint_at_row_start =
+            line_index == end.line && end.col == 0 && slice.is_empty();
+        if !first_line && !wrapped && !empty_endpoint_at_row_start {
             text.push('\n');
         }
         first_line = false;
-        text.push_str(slice.trim_end());
-    }
-    // A selection whose endpoint sits at column 0 of the next row contributes no
-    // characters, only the separator written above. Dropping it keeps a copied
-    // single line a single line, matching xterm and SecureCRT.
-    if text.ends_with('\n') {
-        text.pop();
+        text.push_str(slice);
     }
     if text.is_empty() { None } else { Some(text) }
 }
@@ -1386,6 +1383,23 @@ mod tests {
         assert_eq!(
             terminal_selected_text_for_view(&view, selection).as_deref(),
             Some("abc")
+        );
+    }
+
+    #[test]
+    fn selected_text_keeps_break_when_empty_endpoint_row_extends_past_column_zero() {
+        let mut screen = TerminalScreen::new(5, 3);
+        screen.advance(b"abc\r\n");
+        let mut view = TerminalViewState::new();
+        view.frame_snapshot = Some(Arc::new(screen.snapshot()));
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 1),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc\n")
         );
     }
 
