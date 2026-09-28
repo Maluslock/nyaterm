@@ -553,6 +553,7 @@ fn terminal_frame_snapshot_event_returns_scroll_window() {
         false,
         ActionLinksMatcherSettings::default(),
         false,
+        TerminalFrameSnapshotPurpose::Paint,
     );
 
     assert_eq!(event.offset, offset);
@@ -613,6 +614,7 @@ fn terminal_frame_snapshot_event_covers_multi_viewport_fast_scroll_runs() {
         false,
         ActionLinksMatcherSettings::default(),
         false,
+        TerminalFrameSnapshotPurpose::Paint,
     );
 
     assert_eq!(event.offset, offset);
@@ -653,6 +655,7 @@ fn terminal_priority_snapshot_event_covers_predictive_user_scroll_runs() {
         false,
         ActionLinksMatcherSettings::default(),
         true,
+        TerminalFrameSnapshotPurpose::Paint,
     );
 
     assert_eq!(event.offset, offset);
@@ -692,6 +695,7 @@ fn terminal_live_frame_snapshot_covers_first_scrollback_step() {
         false,
         ActionLinksMatcherSettings::default(),
         false,
+        TerminalFrameSnapshotPurpose::Paint,
     );
 
     assert_eq!(event.offset, offset);
@@ -721,6 +725,7 @@ fn terminal_scroll_window_offsets_live_cursor_by_prepended_rows() {
         false,
         ActionLinksMatcherSettings::default(),
         false,
+        TerminalFrameSnapshotPurpose::Paint,
     );
 
     let prepended_rows = event.snapshot.row_count().saturating_sub(base.row_count());
@@ -1196,6 +1201,7 @@ fn terminal_frame_scroll_request_keeps_normal_scroll_window() {
             false,
             ActionLinksMatcherSettings::default(),
             false,
+            TerminalFrameSnapshotPurpose::Paint,
         )
         .snapshot;
 
@@ -1743,6 +1749,7 @@ fn the_drain_tasks_frame_interest_mask_covers_every_reply_kind() {
         snapshot: Arc::new(screen.snapshot()),
         action_links: None,
         revision: 1,
+        purpose: TerminalFrameSnapshotPurpose::Paint,
         snapshot_duration: Duration::ZERO,
         snapshot_stats: Default::default(),
         action_link_stats: Default::default(),
@@ -1770,6 +1777,7 @@ fn terminal_frame_event_queue_keeps_snapshot_wake_armed_across_output() {
         snapshot: Arc::new(screen.snapshot()),
         action_links: None,
         revision: 1,
+        purpose: TerminalFrameSnapshotPurpose::Paint,
         snapshot_duration: Duration::ZERO,
         snapshot_stats: Default::default(),
         action_link_stats: Default::default(),
@@ -1946,6 +1954,7 @@ fn terminal_frame_event_queue_delivers_snapshot_reply_after_critical_pressure() 
                 snapshot: Arc::new(screen.snapshot()),
                 action_links: None,
                 revision: 1,
+                purpose: TerminalFrameSnapshotPurpose::Paint,
                 snapshot_duration: Duration::ZERO,
                 snapshot_stats: Default::default(),
                 action_link_stats: Default::default(),

@@ -17,10 +17,11 @@ use crate::models::{
     MainMode, TERMINAL_UI_OUTPUT_TAIL_CAP, TerminalFrameActionLinks, TerminalFrameEvent,
     TerminalFrameOutputEvent, TerminalFrameOutputSubmission, TerminalFrameParts,
     TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
-    TerminalFrameSnapshotEvent, TerminalPresentation, TerminalSearchMode, TerminalViewState,
-    TerminalWindowNode, TerminalWorkPolicy, WorkspacePaneNode, append_terminal_ui_output_tail,
-    terminal_action_link_matcher_key, terminal_frame_scroll_window_extra_rows,
-    terminal_frame_search_result_is_current, terminal_snapshot_matches_grid_geometry,
+    TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose, TerminalPresentation,
+    TerminalSearchMode, TerminalViewState, TerminalWindowNode, TerminalWorkPolicy,
+    WorkspacePaneNode, append_terminal_ui_output_tail, terminal_action_link_matcher_key,
+    terminal_frame_scroll_window_extra_rows, terminal_frame_search_result_is_current,
+    terminal_geometry_diagnostics_enabled, terminal_snapshot_matches_grid_geometry,
 };
 
 use super::view_io::terminal_visual_display_offset;
@@ -843,6 +844,19 @@ impl NyaTermApp {
             return TerminalFrameApplyResult::default();
         }
         let has_snapshot = snapshot.is_some();
+        if terminal_geometry_diagnostics_enabled() {
+            tracing::info!(
+                diagnostic = "terminal_frame_geometry",
+                frame_kind = "output",
+                session_id = %session_id,
+                revision,
+                snapshot_rows = snapshot.as_ref().map(|snapshot| snapshot.row_count()),
+                viewport_rows = snapshot.as_ref().map(|snapshot| snapshot.viewport_rows),
+                scrollback_len = snapshot.as_ref().map(|snapshot| snapshot.scrollback_len),
+                total_rows = snapshot.as_ref().map(|snapshot| snapshot.total_rows),
+                "terminal output frame geometry"
+            );
+        }
         let is_active = self.session.active_id() == Some(session_id.as_str());
         let presentation = TerminalPresentation::resolve(
             is_active,
@@ -1041,6 +1055,25 @@ impl NyaTermApp {
                 );
             }
             return TerminalFrameApplyResult::default();
+        }
+        if terminal_geometry_diagnostics_enabled() {
+            let frame_kind = match frame.purpose {
+                TerminalFrameSnapshotPurpose::Paint => "snapshot",
+                TerminalFrameSnapshotPurpose::ActionLinkEnrichment => "action_link_enrichment",
+            };
+            tracing::info!(
+                diagnostic = "terminal_frame_geometry",
+                frame_kind,
+                session_id = %frame.session_id,
+                revision = frame.revision,
+                offset = frame.offset,
+                snapshot_rows = frame.snapshot.row_count(),
+                viewport_rows = frame.snapshot.viewport_rows,
+                scrollback_len = frame.snapshot.scrollback_len,
+                total_rows = frame.snapshot.total_rows,
+                action_link_rows = frame.action_links.as_ref().map(|links| links.cell_ranges_by_line.iter().filter(|ranges| !ranges.is_empty()).count()).unwrap_or(0),
+                "terminal snapshot frame geometry"
+            );
         }
         let Some(view) = self.terminal.view.views.get_mut(&frame.session_id) else {
             return TerminalFrameApplyResult::default();
@@ -1942,8 +1975,8 @@ mod frame_event_queue_tests {
     use crate::models::{
         TerminalFrameActionLinks, TerminalFrameEvent, TerminalFrameOutputEvent,
         TerminalFrameSearchEvent, TerminalFrameSearchKey, TerminalFrameSearchPurpose,
-        TerminalFrameSearchResult, TerminalFrameSnapshotEvent, TerminalProtocolState,
-        TerminalViewState, prepare_terminal_frame_action_links,
+        TerminalFrameSearchResult, TerminalFrameSnapshotEvent, TerminalFrameSnapshotPurpose,
+        TerminalProtocolState, TerminalViewState, prepare_terminal_frame_action_links,
     };
     use nyaterm_core::ActionLinksMatcherSettings;
 
@@ -2017,6 +2050,7 @@ mod frame_event_queue_tests {
             ),
             action_links: None,
             revision: 1,
+            purpose: TerminalFrameSnapshotPurpose::Paint,
             snapshot_duration: Duration::ZERO,
             snapshot_stats: Default::default(),
             action_link_stats: Default::default(),

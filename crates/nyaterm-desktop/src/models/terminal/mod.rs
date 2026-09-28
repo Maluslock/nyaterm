@@ -10,7 +10,7 @@ use nyaterm_terminal::{
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,14 @@ const TERMINAL_FRAME_SCROLL_WINDOW_MAX_EXTRA_ROWS: usize = 192;
 const TERMINAL_FRAME_PRIORITY_SCROLL_WINDOW_MIN_EXTRA_ROWS: usize = 64;
 const TERMINAL_FRAME_PRIORITY_SCROLL_WINDOW_MAX_EXTRA_ROWS: usize = 256;
 const TERMINAL_SCROLLBACK_SNAPSHOT_CACHE_LIMIT: usize = 16;
+
+pub(crate) fn terminal_geometry_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("NYATERM_TERMINAL_GEOMETRY_DIAGNOSTICS").is_some_and(|value| value == "1")
+    })
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TerminalFrameActionLinks {
     pub(crate) matcher_key: u64,
@@ -1764,7 +1772,7 @@ enum TerminalFrameCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TerminalFrameSnapshotPurpose {
+pub(crate) enum TerminalFrameSnapshotPurpose {
     Paint,
     ActionLinkEnrichment,
 }
@@ -2059,6 +2067,7 @@ pub(crate) struct TerminalFrameSnapshotEvent {
     pub(crate) snapshot: Arc<TerminalSnapshot>,
     pub(crate) action_links: Option<TerminalFrameActionLinks>,
     pub(crate) revision: u64,
+    pub(crate) purpose: TerminalFrameSnapshotPurpose,
     pub(crate) snapshot_duration: Duration,
     pub(crate) snapshot_stats: TerminalSnapshotBuildStats,
     pub(crate) action_link_stats: TerminalActionLinkBuildStats,
@@ -2301,6 +2310,7 @@ impl TerminalFrameSession {
             snapshot,
             action_links: None,
             revision: self.revision,
+            purpose: TerminalFrameSnapshotPurpose::Paint,
             snapshot_duration,
             snapshot_stats,
             action_link_stats: TerminalActionLinkBuildStats::default(),
@@ -2391,6 +2401,7 @@ impl TerminalFrameSession {
         action_links_enabled: bool,
         action_link_matchers: ActionLinksMatcherSettings,
         priority: bool,
+        purpose: TerminalFrameSnapshotPurpose,
     ) -> TerminalFrameSnapshotEvent {
         let started_at = Instant::now();
         let (snapshot, snapshot_duration, snapshot_stats) = if priority {
@@ -2430,6 +2441,7 @@ impl TerminalFrameSession {
             snapshot,
             action_links,
             revision: self.revision,
+            purpose,
             snapshot_duration,
             snapshot_stats,
             action_link_stats,
@@ -3386,7 +3398,7 @@ fn run_terminal_frame_processor(
                 action_links_enabled,
                 action_link_matchers,
                 priority,
-                purpose: _,
+                purpose,
             } => {
                 if let Some(session) = sessions.get_mut(&session_id) {
                     let event = session.snapshot_event(
@@ -3395,6 +3407,7 @@ fn run_terminal_frame_processor(
                         action_links_enabled,
                         action_link_matchers,
                         priority,
+                        purpose,
                     );
                     push_terminal_frame_worker_event(
                         &event_queue,

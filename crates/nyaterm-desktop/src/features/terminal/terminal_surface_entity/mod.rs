@@ -24,7 +24,10 @@ use crate::features::terminal::terminal_surface::{
     terminal_scrollbar_metrics, terminal_scrollbar_thumb_element,
     terminal_scrollbar_track_bounds_tracker, terminal_scrollbar_track_color, track_height,
 };
-use crate::models::{TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection};
+use crate::models::{
+    TerminalPerformanceOverlay, TerminalProtocolState, TerminalSelection,
+    terminal_geometry_diagnostics_enabled,
+};
 use crate::terminal::{
     NyaTerminalElement, NyaTerminalLayoutCache, TerminalGridSelection,
     TerminalKeywordHighlightSnapshot, TerminalKeywordHighlighter, TerminalLineDecorations,
@@ -2474,11 +2477,12 @@ fn terminal_surface_fractional_prefetch_offset(
 }
 
 impl Render for TerminalSurface {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         TERMINAL_SURFACE_PAINT_COUNT.fetch_add(1, Ordering::Relaxed);
         let palette = self.palette;
         let cell_w = self.cell_width.max(1.0);
-        let cell_h = self.cell_height.max(1.0);
+        let cell_h =
+            nyaterm_core::terminal_snapped_cell_height(self.cell_height, window.scale_factor());
         let snapshot = self
             .snapshot
             .clone()
@@ -2501,6 +2505,26 @@ impl Render for TerminalSurface {
                 viewport_rows: self.viewport_rows,
                 cell_height: cell_h,
             }) - viewport_anchor_row as f32 * cell_h;
+        if terminal_geometry_diagnostics_enabled() {
+            tracing::info!(
+                diagnostic = "terminal_surface_geometry",
+                session_id = %self.session_id,
+                surface_revision = self.revision,
+                snapshot_rows = snapshot.row_count(),
+                viewport_rows = self.viewport_rows,
+                scrollback_len = self.scrollback_len,
+                total_rows = snapshot.total_rows,
+                viewport_anchor_row,
+                visual_y_offset,
+                cell_height = cell_h,
+                scroll_offset = self.scroll_offset,
+                display_offset = self.display_offset,
+                scroll_residual_lines = self.scroll_residual_lines,
+                snapshot_pending = self.scroll_snapshot_pending,
+                has_action_link_decorations = self.has_action_link_decorations,
+                "terminal surface geometry"
+            );
+        }
         let gutter_enabled = self.show_line_numbers || self.show_timestamps;
         let previous_grid_bounds = self
             .painted_hit_test_geometry
