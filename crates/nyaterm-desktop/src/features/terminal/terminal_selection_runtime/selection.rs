@@ -1073,11 +1073,14 @@ fn terminal_selected_text_from_line_source<'a>(
         let col_end = col_end_excl.min(cells.len().max(col_start));
         let col_start = col_start.min(col_end);
         let slice = terminal_text_cell_slice(&cells, col_start, col_end);
-        if !first_line && !wrapped {
+        let slice = slice.trim_end();
+        let empty_endpoint_at_row_start =
+            line_index == end.line && end.col == 0 && slice.is_empty();
+        if !first_line && !wrapped && !empty_endpoint_at_row_start {
             text.push('\n');
         }
         first_line = false;
-        text.push_str(slice.trim_end());
+        text.push_str(slice);
     }
     if text.is_empty() { None } else { Some(text) }
 }
@@ -1344,6 +1347,59 @@ mod tests {
         assert_eq!(
             terminal_selected_text_for_view(&view, TerminalSelection::all_buffer(5)).as_deref(),
             Some("abcdef\nghij")
+        );
+    }
+
+    /// Dragging to the start of the row below a full line puts the endpoint on an
+    /// empty row. That row contributes no characters, so the copy must not carry
+    /// a trailing break, otherwise pasting a single line yields two lines.
+    #[test]
+    fn selected_text_omits_break_when_endpoint_row_is_empty() {
+        let mut screen = TerminalScreen::new(5, 3);
+        screen.advance(b"abc\r\n");
+        let mut view = TerminalViewState::new();
+        view.frame_snapshot = Some(Arc::new(screen.snapshot()));
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 0),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn selected_text_omits_break_when_endpoint_row_is_empty_on_legacy_screen() {
+        let mut view = TerminalViewState::new();
+        view.screen = TerminalScreen::new(5, 3);
+        view.screen.advance(b"abc\r\n");
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 0),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn selected_text_keeps_break_when_empty_endpoint_row_extends_past_column_zero() {
+        let mut screen = TerminalScreen::new(5, 3);
+        screen.advance(b"abc\r\n");
+        let mut view = TerminalViewState::new();
+        view.frame_snapshot = Some(Arc::new(screen.snapshot()));
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 1),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc\n")
         );
     }
 
