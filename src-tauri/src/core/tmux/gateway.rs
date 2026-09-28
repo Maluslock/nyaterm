@@ -287,7 +287,20 @@ impl TmuxGateway {
         let mut inner = self.lock();
         let passthrough = if inner.active {
             consume_protocol(&mut inner, text);
-            None
+            if inner.active {
+                None
+            } else {
+                // `%exit` arrived inside this chunk, so the gateway handed the
+                // session back. Whatever follows the control stream — in
+                // practice the shell prompt that replaces the tmux client —
+                // belongs to the ordinary terminal.
+                let tail = std::mem::take(&mut inner.line);
+                if tail.is_empty() {
+                    None
+                } else {
+                    Some(tail)
+                }
+            }
         } else {
             self.detect_marker(&mut inner, text)
         };
@@ -430,7 +443,15 @@ fn consume_protocol(inner: &mut Inner, text: &str) {
         let line: String = inner.line.drain(..=index).collect();
         let line = line.trim_end_matches(['\n', '\r']);
         match parse_line(line) {
-            Some(notification) => apply(inner, notification),
+            Some(notification) => {
+                apply(inner, notification);
+                // Control mode can end mid-chunk (`%exit`, followed by tmux's
+                // DCS terminator). Stop parsing so the remainder is handed back
+                // to the ordinary terminal instead of being eaten.
+                if !inner.active {
+                    break;
+                }
+            }
             // Inside a `%begin`..`%end` block the response payload is plain
             // text, not notifications — that is where `list-windows` output lands.
             None => {
@@ -582,7 +603,26 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
                 reason = reason.as_deref().unwrap_or(""),
                 "tmux control-mode client exited"
             );
-            inner.snapshot.exited = true;
+            // Detaching or quitting tmux returns the session to its shell, so
+            // stop consuming output: the prompt that follows must reach xterm
+            // again, and a later `tmux -CC` in the same session has to be
+            // detected from scratch. Carrying the old windows and pane ids over
+            // would re-publish dead state on the next engagement.
+            let session_id = inner.snapshot.session_id.clone();
+            let session_name = inner.snapshot.session_name.clone();
+            inner.active = false;
+            inner.pre.clear();
+            inner.in_block = false;
+            inner.block_lines.clear();
+            inner.pane_ids.clear();
+            inner.active_pane_number.clear();
+            inner.capture = None;
+            inner.snapshot = TmuxGatewaySnapshot {
+                session_id,
+                session_name,
+                exited: true,
+                ..Default::default()
+            };
             inner.mark_state_dirty();
         }
         // `%message` is a user-visible tmux message, not response payload.
@@ -897,5 +937,39 @@ mod tests {
         let (emit, hold) = split_holdable_tail("\x1bP1000");
         assert_eq!(emit, "");
         assert_eq!(hold, "\x1bP1000");
+    }
+    struct NullSink;
+
+    impl TmuxGatewaySink for NullSink {
+        fn state(&self, _snapshot: &TmuxGatewaySnapshot) {}
+        fn pane_output(&self, _output: &TmuxPaneOutput) {}
+    }
+
+    #[test]
+    fn exit_returns_the_session_to_the_ordinary_terminal() {
+        let (command_tx, command_rx) = crate::core::session_command_channel("tmux-exit-test");
+        let gateway = TmuxGateway::new("tmux-exit-test".to_string(), Arc::new(NullSink), command_tx);
+
+        // The control marker engages the gateway.
+        assert!(gateway.filter("\x1bP1000p%begin 1 2 3\r\n%end 1 2 3\r\n").is_none());
+        assert!(gateway.is_active(), "marker should engage the gateway");
+
+        // `%exit` plus tmux's DCS terminator hands the session back, and the
+        // bytes after the control stream flow through to xterm again.
+        let tail = gateway.filter("%exit\n\x1b\\");
+        assert!(!gateway.is_active(), "exit should disengage the gateway");
+        assert_eq!(tail.as_deref(), Some("\x1b\\"));
+
+        // The shell prompt that replaces the tmux client is ordinary output.
+        assert_eq!(
+            gateway.filter("user@host:~$ ").as_deref(),
+            Some("user@host:~$ ")
+        );
+
+        // Running `tmux -CC` again in the same session must engage again.
+        assert!(gateway.filter("\x1bP1000p").is_none());
+        assert!(gateway.is_active(), "a second marker should re-engage");
+
+        drop(command_rx);
     }
 }

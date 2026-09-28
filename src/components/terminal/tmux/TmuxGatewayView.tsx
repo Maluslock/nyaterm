@@ -8,11 +8,12 @@
  * tmux windows are switched from the status strip **below** the panes (matching
  * where tmux itself puts its status line), and from WindTerm-style Alt hotkeys.
  */
-import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, LogOut, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   collectLayoutPanes,
+  sendTmuxPaneInput,
   resizeTmuxClient,
   runTmuxCommand,
   type TmuxGatewaySnapshot,
@@ -121,7 +122,41 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   // WindTerm-style switching: tmux keeps its own prefix key free, and these
   // never reach the pane.
   useEffect(() => {
+    let prefixArmed = false;
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === "b") {
+        // Pane keystrokes are forwarded with `send-keys`, so tmux's own prefix
+        // never reaches the tmux client. Swallow it and treat the next key as a
+        // prefixed binding, so the familiar Ctrl-b d still detaches.
+        event.preventDefault();
+        event.stopPropagation();
+        prefixArmed = true;
+        return;
+      }
+      if (prefixArmed) {
+        prefixArmed = false;
+        event.preventDefault();
+        event.stopPropagation();
+        const prefixCommands: Record<string, string> = {
+          d: "detach-client",
+          c: "new-window",
+          n: "next-window",
+          p: "previous-window",
+          "%": "split-window -h",
+          '"': "split-window -v",
+          "[": "copy-mode",
+        };
+        const command = prefixCommands[event.key];
+        if (command) {
+          send(command);
+        } else if (activePaneId) {
+          // Not emulated here: hand tmux's prefix through to the pane verbatim.
+          void sendTmuxPaneInput(sessionId, activePaneId, `\u0002${event.key}`).catch(
+            () => {},
+          );
+        }
+        return;
+      }
       if (!event.altKey || event.ctrlKey || event.metaKey) return;
       // Alt+arrows follow tmux's directional pane selection, so tmux decides
       // which pane is "left of" the active one rather than duplicating layout
@@ -153,7 +188,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [send]);
+  }, [send, sessionId, activePaneId]);
 
   // tmux owns the layout, so the container's capacity drives the client size.
   useEffect(() => {
@@ -255,6 +290,15 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
         onClick={() => send("new-window")}
       >
         <Plus className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        aria-label={t("tmux.detach")}
+        title={t("tmux.detach")}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
+        onClick={() => send("detach-client")}
+      >
+        <LogOut className="h-3 w-3" />
       </button>
     </div>
   );

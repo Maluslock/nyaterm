@@ -176,4 +176,45 @@ describe("TmuxGatewayView", () => {
       command: "select-pane -R",
     });
   });
+  it("detaches from tmux with Ctrl-b d", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "d" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "detach-client",
+    });
+  });
+
+  it("forwards a prefixed key it does not emulate to the pane", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "z" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_input", {
+      sessionId: "s1",
+      paneId: "%2",
+      data: "\u0002z",
+    });
+  });
+
+  it("offers a detach button in the window strip", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getByLabelText } = render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.click(getByLabelText("tmux.detach"));
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "detach-client",
+    });
+  });
 });

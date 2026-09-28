@@ -2947,6 +2947,7 @@
     "translate": "翻译"
   },
   "tmux": {
+    "detach": "从 tmux 分离（回到终端）",
     "killWindow": "关闭 tmux 窗口",
     "newWindow": "新建 tmux 窗口",
     "nextWindow": "下一个 tmux 窗口",

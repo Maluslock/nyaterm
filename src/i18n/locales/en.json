@@ -2949,6 +2949,7 @@
     "translate": "Translate"
   },
   "tmux": {
+    "detach": "Detach from tmux (back to the shell)",
     "killWindow": "Kill tmux window",
     "newWindow": "New tmux window",
     "nextWindow": "Next tmux window",

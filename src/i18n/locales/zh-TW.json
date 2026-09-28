@@ -2942,6 +2942,7 @@
     "translate": "翻譯"
   },
   "tmux": {
+    "detach": "從 tmux 分離（回到終端）",
     "killWindow": "關閉 tmux 視窗",
     "newWindow": "新增 tmux 視窗",
     "nextWindow": "下一個 tmux 視窗",

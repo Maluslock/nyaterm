@@ -2941,6 +2941,7 @@
     "translate": "번역"
   },
   "tmux": {
+    "detach": "tmux에서 분리(셸로 돌아가기)",
     "killWindow": "tmux 창 닫기",
     "newWindow": "새 tmux 창",
     "nextWindow": "다음 tmux 창",

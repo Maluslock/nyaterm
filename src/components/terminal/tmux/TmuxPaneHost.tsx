@@ -7,6 +7,7 @@
  */
 import type { ReactNode } from "react";
 import { useTmuxGateway } from "@/hooks/useTmuxGateway";
+import { isGatewayExited } from "@/lib/tmuxGateway";
 import { TmuxGatewayView } from "./TmuxGatewayView";
 
 interface TmuxPaneHostProps {
@@ -16,12 +17,30 @@ interface TmuxPaneHostProps {
 
 export function TmuxPaneHost({ sessionId, children }: TmuxPaneHostProps) {
   const snapshot = useTmuxGateway(sessionId);
+  // A tmux client that exited (detach, or quitting the last shell inside it)
+  // hands the session back to its shell, so the ordinary terminal takes over.
+  const showTmux = Boolean(
+    snapshot && snapshot.windows.length > 0 && !isGatewayExited(snapshot),
+  );
 
-  if (snapshot && snapshot.windows.length > 0) {
-    return <TmuxGatewayView sessionId={sessionId} snapshot={snapshot} />;
-  }
-
-  return <>{children}</>;
+  return (
+    <div className="relative h-full w-full min-h-0">
+      {/*
+        The ordinary terminal stays mounted under the tmux view, `inert` so it
+        cannot take focus while covered. Staying mounted is what makes detaching
+        usable: it keeps consuming session output, so the shell prompt printed
+        right after tmux exits is already in its buffer when the view unmounts.
+      */}
+      <div className="absolute inset-0" inert={showTmux}>
+        {children}
+      </div>
+      {showTmux && snapshot ? (
+        <div className="absolute inset-0">
+          <TmuxGatewayView sessionId={sessionId} snapshot={snapshot} />
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default TmuxPaneHost;
