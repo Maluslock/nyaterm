@@ -1079,6 +1079,12 @@ fn terminal_selected_text_from_line_source<'a>(
         first_line = false;
         text.push_str(slice.trim_end());
     }
+    // A selection whose endpoint sits at column 0 of the next row contributes no
+    // characters, only the separator written above. Dropping it keeps a copied
+    // single line a single line, matching xterm and SecureCRT.
+    if text.ends_with('\n') {
+        text.pop();
+    }
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -1344,6 +1350,42 @@ mod tests {
         assert_eq!(
             terminal_selected_text_for_view(&view, TerminalSelection::all_buffer(5)).as_deref(),
             Some("abcdef\nghij")
+        );
+    }
+
+    /// Dragging to the start of the row below a full line puts the endpoint on an
+    /// empty row. That row contributes no characters, so the copy must not carry
+    /// a trailing break, otherwise pasting a single line yields two lines.
+    #[test]
+    fn selected_text_omits_break_when_endpoint_row_is_empty() {
+        let mut screen = TerminalScreen::new(5, 3);
+        screen.advance(b"abc\r\n");
+        let mut view = TerminalViewState::new();
+        view.frame_snapshot = Some(Arc::new(screen.snapshot()));
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 0),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn selected_text_omits_break_when_endpoint_row_is_empty_on_legacy_screen() {
+        let mut view = TerminalViewState::new();
+        view.screen = TerminalScreen::new(5, 3);
+        view.screen.advance(b"abc\r\n");
+        let selection = TerminalSelection::from_range(
+            TerminalBufferCellPos::new(0, 0),
+            TerminalBufferCellPos::new(1, 0),
+        );
+
+        assert_eq!(
+            terminal_selected_text_for_view(&view, selection).as_deref(),
+            Some("abc")
         );
     }
 
