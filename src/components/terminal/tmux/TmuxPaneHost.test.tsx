@@ -68,4 +68,27 @@ describe("TmuxPaneHost", () => {
     expect(screen.getByTestId("terminal")).toBeTruthy();
     expect(screen.queryByTestId("tmux-view")).toBeNull();
   });
+  it("hands the keyboard back to the terminal when the tmux view goes away", () => {
+    // `inert` drops focus when the tmux view appears, so detaching must put the
+    // caret back into the terminal underneath instead of making the user click.
+    gateway.snapshot = snapshot({
+      windows: [{ id: "@0", index: 0, name: "bash", active: true, panes: [] }],
+    });
+
+    const { rerender } = render(
+      <TmuxPaneHost sessionId="s1">
+        <textarea className="xterm-helper-textarea" data-testid="terminal-input" />
+      </TmuxPaneHost>,
+    );
+    expect(screen.queryByTestId("tmux-view")).toBeTruthy();
+
+    gateway.snapshot = snapshot({ exited: true });
+    rerender(
+      <TmuxPaneHost sessionId="s1">
+        <textarea className="xterm-helper-textarea" data-testid="terminal-input" />
+      </TmuxPaneHost>,
+    );
+
+    expect(document.activeElement).toBe(screen.getByTestId("terminal-input"));
+  });
 });
