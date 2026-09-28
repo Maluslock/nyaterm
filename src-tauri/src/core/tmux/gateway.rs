@@ -81,6 +81,8 @@ struct Inner {
     state_dirty: bool,
     pane_outputs: Vec<(String, String)>,
     outgoing: Vec<String>,
+    /// Whether the one-shot missing-marker probe has already been logged.
+    probe_logged: bool,
 }
 
 impl Inner {
@@ -247,6 +249,20 @@ impl TmuxGateway {
         buffer.push_str(text);
 
         let Some(index) = buffer.find(CONTROL_MARKER) else {
+            // Diagnose a `tmux -CC` that never reaches the gateway: tmux only
+            // emits `ESC P 1000 p` on clients that support control-control mode,
+            // so a DCS introducer without that marker (older tmux builds) or a
+            // bare control-protocol line both need to be visible in user logs.
+            if !inner.probe_logged {
+                if let Some(probe) = control_mode_probe(&buffer) {
+                    inner.probe_logged = true;
+                    tracing::info!(
+                        session_id = %self.session_id,
+                        probe,
+                        "tmux control-mode marker missing in candidate output"
+                    );
+                }
+            }
             let (emit, hold) = split_holdable_tail(&buffer);
             inner.pre = hold;
             return if emit.is_empty() { None } else { Some(emit) };
@@ -639,6 +655,22 @@ fn split_holdable_tail(buffer: &str) -> (String, String) {
     (buffer.to_string(), String::new())
 }
 
+/// Classify output that looks like it came from tmux but did not carry the
+/// control-control marker, so a failed `tmux -CC` is diagnosable.
+///
+/// * `"dcs"` — a DCS introducer arrived without `1000p` (e.g. an older tmux
+///   that does not announce control-control mode).
+/// * `"protocol"` — a bare control-mode notification/block line arrived.
+fn control_mode_probe(buffer: &str) -> Option<&'static str> {
+    if buffer.contains("\x1bP") || buffer.contains('\u{0090}') {
+        return Some("dcs");
+    }
+    if buffer.contains("%begin ") || buffer.contains("%output %") || buffer.contains("%end ") {
+        return Some("protocol");
+    }
+    None
+}
+
 /// Owns one gateway per session id.
 #[derive(Default)]
 pub struct TmuxGatewayManager {
@@ -690,6 +722,15 @@ impl TmuxGatewayManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_markerless_control_mode_output() {
+        assert_eq!(control_mode_probe("plain terminal output"), None);
+        assert_eq!(control_mode_probe("before\x1bP1234pafter"), Some("dcs"));
+        assert_eq!(control_mode_probe("%begin 1700000000 1 0\n"), Some("protocol"));
+        assert_eq!(control_mode_probe("%output %0 hello"), Some("protocol"));
+        assert_eq!(control_mode_probe("%end 1700000000 1 0"), Some("protocol"));
+    }
 
     #[test]
     fn holds_only_marker_prefixes_of_two_or_more_bytes() {

@@ -43,3 +43,6 @@ WindTerm/
 .claude
 .codex
 .trae
+
+# Cross-compiled Windows test package (build artifact)
+dist-windows/

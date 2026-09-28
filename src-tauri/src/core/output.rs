@@ -83,6 +83,16 @@ impl SessionOutputCoalescer {
             app.try_state::<Arc<crate::core::tmux::TmuxGatewayManager>>()
                 .map(|manager| manager.gateway_for(id, &app, &flow_control_tx))
         });
+        // One line per session so a missing tmux gateway is diagnosable from a
+        // user log alone: `gateway_attached=false` means the gateway manager was
+        // unreachable from app state, while `true` without a later
+        // "tmux control mode detected" line means tmux never sent the marker on
+        // this connection.
+        tracing::info!(
+            session_id = ?session_id,
+            gateway_attached = gateway.is_some(),
+            "terminal output coalescer created"
+        );
         Self::with_flow_sink(flow_control_tx, move |payload| {
             if let (Some(manager), Some(session_id)) = (&session_manager, &session_id) {
                 manager.append_recent_output(session_id, &payload.data);

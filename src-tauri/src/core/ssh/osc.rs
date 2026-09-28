@@ -1382,6 +1382,31 @@ eval "$PROMPT_COMMAND" 2>/dev/null || true
     }
 
     #[test]
+    fn dcs_control_marker_survives_the_stripper() {
+        let payload = "hello\x1bP1000p%begin 1 2 3\r\n%end 1 2 3\r\n";
+        let result = OscStripper::new(&build_ready_marker("session-1")).push(payload);
+        assert!(
+            result.visible.contains("\x1bP1000p"),
+            "DCS marker was lost: {:?}",
+            result.visible
+        );
+        assert_eq!(result.visible, payload);
+    }
+
+    #[test]
+    fn dcs_control_marker_survives_when_split_across_chunks() {
+        let mut stripper = OscStripper::new(&build_ready_marker("session-1"));
+        let first = stripper.push("hello\x1b");
+        let second = stripper.push("P1000p%begin 1 2 3\r\n");
+        let visible = format!("{}{}", first.visible, second.visible);
+        assert!(
+            visible.contains("\x1bP1000p"),
+            "DCS marker was lost across chunks: {:?}",
+            visible
+        );
+    }
+
+    #[test]
     fn ready_marker_with_prompt_in_same_chunk_preserves_prompt_after_ready() {
         let payload = "echoed injection\x1b]7777;NyaTermReady:session-1\x07[user@host ~]$ ";
 
