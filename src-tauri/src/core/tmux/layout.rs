@@ -6,12 +6,16 @@
 //! layout  := checksum "," geometry ( leaf | "{" node ("," node)* "}" | "[" node ("," node)* "]" )
 //! geometry:= WIDTH "x" HEIGHT "," X "," Y
 //! checksum:= 4 hex digits
-//! leaf    := "," PANE_INDEX
+//! leaf    := "," PANE_NUMBER
 //! ```
 //!
-//! `{...}` arranges children side by side; `[...]` stacks them. Leaf pane
-//! numbers are **indices** within the window (`#{pane_index}`), not the stable
-//! `%N` pane ids used by `%output` notifications.
+//! `{...}` arranges children side by side; `[...]` stacks them.
+//!
+//! The leaf number is the pane's **id number** — the `N` of the `%N` pane id
+//! used by `%output` notifications — not `#{pane_index}`. tmux renumbers pane
+//! indices as panes come and go while ids stay put, so a window created after
+//! the first one has `pane_index` 0 with pane id `%1`; matching ids by index
+//! silently leaves those panes unresolved.
 
 use super::types::{TmuxLayoutNode, TmuxPane, TmuxSplitDirection};
 

@@ -19,7 +19,8 @@ pub enum TmuxSplitDirection {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TmuxPane {
-    /// tmux pane **index** within its window, as used by layout strings.
+    /// The pane number tmux writes into the window layout, which is the `N` of
+    /// the pane's `%N` id (not `#{pane_index}`).
     pub index: u32,
     /// Stable tmux pane id (`%N`), as used by `%output` notifications.
     ///

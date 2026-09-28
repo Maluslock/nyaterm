@@ -94,6 +94,21 @@ export async function resizeTmuxClient(
   await invoke("tmux_gateway_resize", { sessionId, width, height });
 }
 
+/**
+ * Replay a pane's current screen into its view.
+ *
+ * Control mode only streams *new* pane output: attaching to a session that
+ * already had content, or mounting a pane view after its prompt was printed,
+ * would otherwise leave the pane blank. The replay arrives on the normal pane
+ * output event, prefixed with a clear-screen sequence.
+ */
+export async function requestTmuxPaneCapture(
+  sessionId: string,
+  paneId: string,
+): Promise<void> {
+  await invoke("tmux_gateway_capture_pane", { sessionId, paneId });
+}
+
 /** Run a tmux command on behalf of the UI (split-window, kill-pane, ...). */
 export async function runTmuxCommand(
   sessionId: string,

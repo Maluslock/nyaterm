@@ -18,6 +18,7 @@ import { useCommandHistory } from "@/hooks/useCommandHistory";
 import { useKeywordHighlighter } from "@/hooks/useKeywordHighlighter";
 import { buildTerminalThemeColors } from "@/lib/backgroundImage";
 import { invoke } from "@/lib/invoke";
+import { logger } from "@/lib/logger";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { buildTerminalCommandInput } from "@/lib/sessionInput";
 import {
@@ -30,6 +31,7 @@ import {
   sendTmuxPaneInput,
   type TmuxPane,
   type TmuxPaneOutput,
+  requestTmuxPaneCapture,
   tmuxPaneOutputEvent,
 } from "@/lib/tmuxGateway";
 import { commandStartsSuggestionSuppressingProgram } from "@/lib/commandSuggestionSuppression";
@@ -66,6 +68,9 @@ export function TmuxPaneTerminal({
   const terminalRef = useRef<Terminal | null>(null);
   const paneIdRef = useRef<string | null>(pane.id ?? null);
   paneIdRef.current = pane.id ?? null;
+  /** Pane whose screen has already been requested, so it is asked for once. */
+  const capturedPaneRef = useRef<string | null>(null);
+  const [outputListenerReady, setOutputListenerReady] = useState(false);
 
   const { theme } = useTheme();
   const {
@@ -293,8 +298,12 @@ export function TmuxPaneTerminal({
       terminal.write(event.payload.data, () => stampWrittenLines());
     })
       .then((dispose) => {
-        if (disposed) dispose();
-        else unlisten = dispose;
+        if (disposed) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+        setOutputListenerReady(true);
       })
       .catch(() => {});
 
@@ -313,6 +322,27 @@ export function TmuxPaneTerminal({
       lineTimestampsRef.current.clear();
     };
   }, [sessionId, reportCellMetrics, stampWrittenLines, syncSuggestions]);
+
+  // Control mode only streams *new* pane output. Anything the pane drew before
+  // this view existed — the prompt printed when `tmux -CC` started, or a whole
+  // pre-existing screen when attaching to a live session — never arrives, which
+  // leaves the pane blank. Ask tmux for the current screen once the output
+  // listener is live, and again if the pane id only resolves later on.
+  useEffect(() => {
+    if (!outputListenerReady) return;
+    const paneId = pane.id;
+    if (!paneId || capturedPaneRef.current === paneId) return;
+    capturedPaneRef.current = paneId;
+    void requestTmuxPaneCapture(sessionId, paneId).catch((error) => {
+      logger.warn({
+        domain: "session.lifecycle",
+        event: "tmux.pane_capture_failed",
+        message: "Failed to request a tmux pane screen replay",
+        data: { session_id: sessionId, pane_id: paneId },
+        error,
+      });
+    });
+  }, [outputListenerReady, pane.id, sessionId]);
 
   // Keyword highlighting is shared with ordinary sessions, including the
   // built-in semantic rule categories.

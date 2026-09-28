@@ -51,6 +51,21 @@ pub async fn tmux_gateway_resize(
     Ok(())
 }
 
+/// Replay a pane's current screen, for a pane view that has just mounted.
+///
+/// Control mode only streams new output, so without this a pane that already had
+/// content (or whose prompt was printed before its view mounted) stays blank.
+#[tauri::command]
+pub async fn tmux_gateway_capture_pane(
+    manager: State<'_, Arc<TmuxGatewayManager>>,
+    session_id: String,
+    pane_id: String,
+) -> AppResult<()> {
+    let gateway = gateway_for(&manager, &session_id)?;
+    gateway.capture_pane(&pane_id);
+    Ok(())
+}
+
 /// Run a tmux command on behalf of the UI (split-window, kill-pane, ...).
 #[tauri::command]
 pub async fn tmux_gateway_command(

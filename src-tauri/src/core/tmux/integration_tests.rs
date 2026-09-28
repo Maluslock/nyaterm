@@ -246,6 +246,37 @@ fn gateway_drives_a_real_tmux_control_client() {
         }
     }
 
+    // ---- 2c. A window created later has pane index 0 but a fresh `%N` id --
+    // The layout's leaf number is the pane *id* number, not `#{pane_index}`:
+    // every window created after the first one reports pane_index 0 while its
+    // pane id is %1 or higher. Keying ids by index therefore leaves such panes
+    // without an id, which is what rendered an empty (black) pane in the app.
+    let existing_window_ids: Vec<String> = sink
+        .latest_state()
+        .unwrap_or_default()
+        .windows
+        .iter()
+        .map(|window| window.id.clone())
+        .collect();
+    gateway.run_ui_command("new-window -t itest");
+    let second_window_ready = wait_until(
+        || {
+            sink.latest_state().is_some_and(|state| {
+                state.windows.iter().any(|window| {
+                    !existing_window_ids.contains(&window.id)
+                        && !window.panes.is_empty()
+                        && window.panes.iter().all(|pane| pane.id.is_some())
+                })
+            })
+        },
+        Duration::from_secs(20),
+    );
+    assert!(
+        second_window_ready,
+        "a window created after startup must resolve its pane ids; state={:?}",
+        sink.latest_state().unwrap_or_default()
+    );
+
     // ---- 3. The protocol must not leak to xterm ---------------------------
     // The gateway reports xterm-bound bytes through filter()'s return value, so
     // anything it consumed is invisible here by construction. What we can assert
@@ -305,25 +336,31 @@ fn gateway_drives_a_real_tmux_control_client() {
     }
 
     // ---- 5. Killing a window removes it -----------------------------------
-    let victim = state
+    let before_kill = sink.latest_state().unwrap_or_default();
+    let victim = before_kill
         .windows
         .iter()
-        .find(|w| state.active_window_id.as_deref() != Some(w.id.as_str()))
-        .or_else(|| state.windows.first())
+        .find(|w| before_kill.active_window_id.as_deref() != Some(w.id.as_str()))
+        .or_else(|| before_kill.windows.first())
         .map(|w| w.id.clone())
         .expect("a window to kill");
     gateway.run_ui_command(&format!("kill-window -t {victim}"));
+    // Assert on the victim's absence rather than on a window count: other
+    // windows created by earlier stages can still be arriving, which makes a
+    // count-based check race the snapshot.
     let removed = wait_until(
         || {
-            sink.latest_state()
-                .is_some_and(|state| state.windows.len() < 2)
+            sink.latest_state().is_some_and(|state| {
+                !state.windows.iter().any(|window| window.id == victim)
+            })
         },
         Duration::from_secs(20),
     );
     let state = sink.latest_state().unwrap_or_default();
     assert!(
         removed,
-        "kill-window should have removed a window; state={state:?}"
+        "kill-window should have removed window {victim}; windows_before={:?}; state={state:?}",
+        before_kill.windows.iter().map(|w| w.id.clone()).collect::<Vec<_>>()
     );
 
     // ---- teardown ---------------------------------------------------------

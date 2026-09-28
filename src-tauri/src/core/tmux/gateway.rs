@@ -17,7 +17,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::layout::{apply_pane_ids, mark_active, parse_layout};
-use super::protocol::{parse_line, TmuxNotification};
+use super::protocol::{parse_line, unescape_output, TmuxNotification};
 use super::types::{TmuxGatewaySnapshot, TmuxWindow};
 use crate::core::recording::{InputOrigin, InputSensitivity};
 use crate::core::session::{SessionCommand, SessionCommandSender};
@@ -47,6 +47,12 @@ pub struct TmuxPaneOutput {
 /// response self-identifying no matter how blocks are batched.
 const WINDOW_TAG: &str = "NYATERM-WINDOW:";
 const PANE_TAG: &str = "NYATERM-PANE:";
+/// Brackets the `capture-pane` replay of one pane's current screen.
+const CAPTURE_BEGIN_TAG: &str = "NYATERM-CAPTURE-BEGIN:";
+const CAPTURE_END_TAG: &str = "NYATERM-CAPTURE-END:";
+/// Clear the pane terminal before writing a captured screen, so a replay is
+/// idempotent and can be re-requested when a pane view remounts.
+const CAPTURE_CLEAR: &str = "\x1b[2J\x1b[H";
 
 fn windows_command(target: Option<&str>) -> String {
     let target = target.map(|id| format!(" -t {id}")).unwrap_or_default();
@@ -62,6 +68,30 @@ fn panes_command(window_id: Option<&str>) -> String {
     )
 }
 
+/// Ask tmux for the current screen of one pane, framed by tags.
+///
+/// Control mode only streams *new* pane output: a client that attaches to a
+/// session with existing content (or one whose pane terminals mount after the
+/// first prompt has already been printed) would otherwise show an empty pane
+/// forever. `capture-pane` is the only way to recover that screen.
+///
+/// The three commands are written as three separate lines rather than one
+/// `;`-separated line: tmux 3.2 rejects a chained line whenever `capture-pane`
+/// is followed by another command (`%error parse error: syntax error`), and each
+/// command gets its own `%begin`/`%end` block anyway. The screen is therefore
+/// bracketed by explicit markers instead of relying on block order.
+fn capture_begin_command(pane_id: &str) -> String {
+    format!("display-message -p -t {pane_id} '{CAPTURE_BEGIN_TAG}#{{pane_id}}'")
+}
+
+fn capture_screen_command(pane_id: &str) -> String {
+    format!("capture-pane -p -e -t {pane_id}")
+}
+
+fn capture_end_command(pane_id: &str) -> String {
+    format!("display-message -p -t {pane_id} '{CAPTURE_END_TAG}#{{pane_id}}'")
+}
+
 #[derive(Default)]
 struct Inner {
     active: bool,
@@ -70,10 +100,13 @@ struct Inner {
     /// Partial trailing control-protocol line.
     line: String,
     snapshot: TmuxGatewaySnapshot,
-    /// window id -> (pane index -> stable `%N` pane id)
+    /// window id -> (pane number -> stable `%N` pane id)
+    ///
+    /// The key is the number tmux writes into the window layout, which is the
+    /// pane's *id* number (`%N`) rather than `#{pane_index}`.
     pane_ids: HashMap<String, HashMap<u32, String>>,
-    /// window id -> active pane index reported by tmux
-    active_pane_index: HashMap<String, u32>,
+    /// window id -> active pane number reported by tmux
+    active_pane_number: HashMap<String, u32>,
     /// Lines captured inside the current `%begin`..`%end` block.
     block_lines: Vec<String>,
     in_block: bool,
@@ -83,6 +116,8 @@ struct Inner {
     outgoing: Vec<String>,
     /// Whether the one-shot missing-marker probe has already been logged.
     probe_logged: bool,
+    /// Pane whose screen is being captured, with the lines collected so far.
+    capture: Option<(String, Vec<String>)>,
 }
 
 impl Inner {
@@ -202,12 +237,40 @@ impl TmuxGateway {
             self.write_command(&command);
         }
         if let Some(snapshot) = state {
+            // One line per published state, so a blank tmux view can be told
+            // apart from a view whose panes exist but have nothing in them.
+            tracing::info!(
+                session_id = %self.session_id,
+                windows = snapshot.windows.len(),
+                panes = snapshot.windows.iter().map(|w| w.panes.len()).sum::<usize>(),
+                ids = %snapshot
+                    .windows
+                    .iter()
+                    .map(|window| {
+                        window
+                            .panes
+                            .iter()
+                            .map(|pane| pane.id.clone().unwrap_or_else(|| "-".to_string()))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(";"),
+                "tmux gateway state published"
+            );
             self.sink.state(&snapshot);
         }
         for (pane_id, data) in pane_outputs {
             if data.is_empty() {
                 continue;
             }
+            tracing::info!(
+                session_id = %self.session_id,
+                pane_id = %pane_id,
+                bytes = data.len(),
+                replay = data.starts_with("\u{1b}[2J"),
+                "tmux pane output forwarded"
+            );
             self.sink.pane_output(&TmuxPaneOutput { pane_id, data });
         }
     }
@@ -319,6 +382,19 @@ impl TmuxGateway {
         self.write_command(&command);
     }
 
+    /// Replay one pane's current screen into its terminal view.
+    ///
+    /// The captured screen is delivered through the normal pane-output channel,
+    /// so the caller only has to ask for it (e.g. when a pane view mounts).
+    pub fn capture_pane(&self, pane_id: &str) {
+        if pane_id.is_empty() {
+            return;
+        }
+        self.write_command(&capture_begin_command(pane_id));
+        self.write_command(&capture_screen_command(pane_id));
+        self.write_command(&capture_end_command(pane_id));
+    }
+
     /// Send raw bytes to a tmux pane as if typed.
     ///
     /// Uses `send-keys -H` so every byte (control characters, ESC sequences,
@@ -415,7 +491,7 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
         | TmuxNotification::UnlinkedWindowClose { window_id } => {
             inner.snapshot.windows.retain(|w| w.id != window_id);
             inner.pane_ids.remove(&window_id);
-            inner.active_pane_index.remove(&window_id);
+            inner.active_pane_number.remove(&window_id);
             if inner.snapshot.active_window_id.as_deref() == Some(window_id.as_str()) {
                 inner.snapshot.active_window_id =
                     inner.snapshot.windows.first().map(|w| w.id.clone());
@@ -431,7 +507,7 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
         }
         TmuxNotification::LayoutChange { window_id, layout } => {
             let ids = inner.pane_ids.get(&window_id).cloned();
-            let active = inner.active_pane_index.get(&window_id).copied();
+            let active = inner.active_pane_number.get(&window_id).copied();
             let mut needs_pane_sync = false;
             if let Some(window) = inner.find_window_mut(&window_id) {
                 match parse_layout(&layout) {
@@ -474,7 +550,7 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
                 .get(&window_id)
                 .and_then(|ids| ids.iter().find(|(_, id)| **id == pane_id).map(|(i, _)| *i));
             if let Some(index) = index {
-                inner.active_pane_index.insert(window_id.clone(), index);
+                inner.active_pane_number.insert(window_id.clone(), index);
             }
             inner.snapshot.active_window_id = Some(window_id.clone());
             if let Some(window) = inner.find_window_mut(&window_id) {
@@ -526,6 +602,28 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
 /// into `%begin`..`%end` blocks (it emits an extra empty block at setup, which
 /// makes positional correlation unreliable).
 fn process_response_block(inner: &mut Inner, lines: &[String]) {
+    // Screen captures are bracketed by tags because tmux splits a chained
+    // command into one block per command.
+    if let Some(first) = lines.first().map(String::as_str) {
+        if let Some(rest) = first.strip_prefix(CAPTURE_BEGIN_TAG) {
+            inner.capture = Some((rest.trim().to_string(), Vec::new()));
+            return;
+        }
+        if first.starts_with(CAPTURE_END_TAG) {
+            if let Some((pane_id, captured)) = inner.capture.take() {
+                let text: Vec<String> = captured.iter().map(|line| unescape_output(line)).collect();
+                inner
+                    .pane_outputs
+                    .push((pane_id, format!("{CAPTURE_CLEAR}{}", text.join("\r\n"))));
+            }
+            return;
+        }
+    }
+    if let Some((_, captured)) = inner.capture.as_mut() {
+        captured.extend(lines.iter().cloned());
+        return;
+    }
+
     let mut saw_windows = false;
     let mut saw_panes = false;
 
@@ -560,7 +658,7 @@ fn apply_window_line(inner: &mut Inner, rest: &str) {
     }
 
     let ids = inner.pane_ids.get(&id).cloned();
-    let active_pane = inner.active_pane_index.get(&id).copied();
+    let active_pane = inner.active_pane_number.get(&id).copied();
 
     let mut layout = parse_layout(fields[4]).ok();
     if let Some(node) = layout.as_mut() {
@@ -603,14 +701,25 @@ fn apply_pane_line(inner: &mut Inner, rest: &str) {
         return;
     }
     let window_id = fields[0].to_string();
-    let index: u32 = fields[1].parse().unwrap_or(0);
+    let pane_id = fields[2];
+    // The window layout's leaf number is the pane's id number (`%N`), not
+    // `#{pane_index}`: tmux renumbers indices as panes come and go while ids
+    // stay put, so a window created after the first one has pane_index 0 with
+    // pane id %1. Keying by index left every such pane without an id, which the
+    // frontend renders as an empty pane it cannot route input to.
+    let Some(number) = pane_id
+        .strip_prefix('%')
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return;
+    };
     inner
         .pane_ids
         .entry(window_id.clone())
         .or_default()
-        .insert(index, fields[2].to_string());
+        .insert(number, pane_id.to_string());
     if fields[3] == "1" {
-        inner.active_pane_index.insert(window_id, index);
+        inner.active_pane_number.insert(window_id, number);
     }
 }
 
@@ -619,7 +728,7 @@ fn reattach_pane_ids(inner: &mut Inner) {
     for position in 0..inner.snapshot.windows.len() {
         let window_id = inner.snapshot.windows[position].id.clone();
         let ids = inner.pane_ids.get(&window_id).cloned();
-        let active = inner.active_pane_index.get(&window_id).copied();
+        let active = inner.active_pane_number.get(&window_id).copied();
         let window = &mut inner.snapshot.windows[position];
         if let Some(layout) = window.layout.as_mut() {
             if let Some(ids) = ids {
@@ -722,6 +831,26 @@ impl TmuxGatewayManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_response_becomes_a_pane_screen_replay() {
+        let mut inner = Inner::default();
+        process_response_block(&mut inner, &["NYATERM-CAPTURE-BEGIN:%1".to_string()]);
+        process_response_block(
+            &mut inner,
+            &["hello \\033[31mred".to_string(), "second line".to_string()],
+        );
+        process_response_block(&mut inner, &["NYATERM-CAPTURE-END:%1".to_string()]);
+
+        assert_eq!(inner.pane_outputs.len(), 1);
+        let (pane_id, data) = inner.pane_outputs.remove(0);
+        assert_eq!(pane_id, "%1");
+        // Captured lines arrive octal-escaped and are replayed with a clear.
+        assert_eq!(
+            data,
+            "\x1b[2J\x1b[Hhello \x1b[31mred\r\nsecond line"
+        );
+    }
 
     #[test]
     fn classifies_markerless_control_mode_output() {
