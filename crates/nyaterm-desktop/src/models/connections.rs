@@ -680,6 +680,70 @@ pub(crate) enum CredentialAutofillMatchOutcome {
     },
 }
 
+/// What the app does with a match reply.
+///
+/// `Send` always stands on a prior user step. The only path to it is the
+/// pending vault-credential flow, which the user enters by selecting a
+/// username suggestion; a connection password can never reach it, so
+/// remote-controlled terminal output stays an offer rather than an
+/// authorization to disclose a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CredentialAutofillAction {
+    Send {
+        target: CredentialAutofillTarget,
+        kind: CredentialPromptKind,
+    },
+    Suggest {
+        kind: CredentialPromptKind,
+        matches: Vec<CredentialAutofillTarget>,
+        clear_pending: bool,
+    },
+    None {
+        clear_pending: bool,
+    },
+}
+
+pub(crate) fn credential_autofill_action(
+    outcome: &CredentialAutofillMatchOutcome,
+) -> CredentialAutofillAction {
+    match outcome {
+        CredentialAutofillMatchOutcome::NoMatch { clear_pending } => {
+            CredentialAutofillAction::None {
+                clear_pending: *clear_pending,
+            }
+        }
+        CredentialAutofillMatchOutcome::Suggest {
+            kind,
+            matches,
+            clear_pending,
+        } => CredentialAutofillAction::Suggest {
+            kind: *kind,
+            matches: matches.clone(),
+            clear_pending: *clear_pending,
+        },
+        CredentialAutofillMatchOutcome::AutoFill { credential, kind }
+            if !credential.is_connection_password() =>
+        {
+            CredentialAutofillAction::Send {
+                target: credential.clone(),
+                kind: *kind,
+            }
+        }
+        // A connection password is decrypted and sent only from an explicit
+        // selection in the suggestion panel. Terminal output is remote input, so
+        // a prompt a remote process can print -- `[sudo] password for root:` --
+        // must never authorize sending the saved secret on its own. Downgrade
+        // any such reply to a suggestion the user has to pick.
+        CredentialAutofillMatchOutcome::AutoFill { credential, kind } => {
+            CredentialAutofillAction::Suggest {
+                kind: *kind,
+                matches: vec![credential.clone()],
+                clear_pending: true,
+            }
+        }
+    }
+}
+
 pub(crate) struct CredentialAutofillMatchPipeline {
     command_tx: Option<mpsc::Sender<CredentialAutofillMatchRequest>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -1024,7 +1088,8 @@ mod credential_autofill_match_tests {
         CredentialAutofillMatchEvent, CredentialAutofillMatchEventQueue,
         CredentialAutofillMatchOutcome, CredentialAutofillMatchRequest,
         CredentialAutofillMatchRequestKey, CredentialAutofillTarget, CredentialPromptKind,
-        PendingCredentialAutofill, SavedCredential, credential_autofill_match_outcome,
+        PendingCredentialAutofill, SavedCredential, credential_autofill_action,
+        credential_autofill_match_outcome,
     };
     use crate::models::event_wake::EventWake;
 
@@ -1318,6 +1383,98 @@ mod credential_autofill_match_tests {
                 clear_pending: false
             }
         ));
+    }
+
+    fn connection_password_target(username: &str) -> CredentialAutofillTarget {
+        CredentialAutofillTarget::ConnectionPassword(super::ConnectionPasswordTarget {
+            connection_id: "conn-1".to_string(),
+            connection_name: "prod".to_string(),
+            username: username.to_string(),
+        })
+    }
+
+    #[test]
+    fn sudo_prompt_for_login_user_suggests_connection_password_without_sending_it() {
+        // A remote process can print this; it must not be able to authorize
+        // sending the saved connection password.
+        let mut regex_cache = HashMap::new();
+        let candidate = connection_password_target("root");
+        let outcome = credential_autofill_match_outcome(
+            request(
+                "[sudo] password for root:",
+                CredentialPromptKind::Password,
+                vec![candidate.clone()],
+                None,
+            ),
+            &mut regex_cache,
+        );
+
+        // The sole candidate does reach the user as a suggestion...
+        assert_eq!(
+            credential_autofill_action(&outcome),
+            super::CredentialAutofillAction::Suggest {
+                kind: CredentialPromptKind::Password,
+                matches: vec![candidate],
+                clear_pending: true,
+            }
+        );
+        assert!(
+            !matches!(
+                credential_autofill_action(&outcome),
+                super::CredentialAutofillAction::Send { .. }
+            ),
+            "a matching sudo prompt must never resolve to a send"
+        );
+    }
+
+    #[test]
+    fn connection_password_autofill_reply_never_sends() {
+        // Defense in depth: even a reply that claims AutoFill is downgraded to
+        // a suggestion when it carries the connection password.
+        let candidate = connection_password_target("root");
+        let action = credential_autofill_action(&CredentialAutofillMatchOutcome::AutoFill {
+            credential: candidate.clone(),
+            kind: CredentialPromptKind::Password,
+        });
+
+        assert_eq!(
+            action,
+            super::CredentialAutofillAction::Suggest {
+                kind: CredentialPromptKind::Password,
+                matches: vec![candidate],
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_vault_credential_still_autofills_after_user_selection() {
+        // The pending flow is entered by selecting a username suggestion, so
+        // its auto-fill keeps the vault path working.
+        let outcome = CredentialAutofillMatchOutcome::AutoFill {
+            credential: CredentialAutofillTarget::Vault(credential("c1", "root", None, None, true)),
+            kind: CredentialPromptKind::Password,
+        };
+
+        assert!(matches!(
+            credential_autofill_action(&outcome),
+            super::CredentialAutofillAction::Send {
+                kind: CredentialPromptKind::Password,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn no_match_reply_produces_no_action() {
+        assert_eq!(
+            credential_autofill_action(&CredentialAutofillMatchOutcome::NoMatch {
+                clear_pending: true
+            }),
+            super::CredentialAutofillAction::None {
+                clear_pending: true
+            }
+        );
     }
 }
 

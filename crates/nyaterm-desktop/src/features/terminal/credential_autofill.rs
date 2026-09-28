@@ -10,18 +10,18 @@ use gpui::{
     svg,
 };
 use nyaterm_core::{
-    ConnectionAuth, ConnectionType, CredentialPromptKind, SecretString, TerminalInputState,
+    ConnectionAuth, CredentialPromptKind, SavedConnection, SecretString, TerminalInputState,
     credential_password_prompt_target_user, credential_password_prompt_targets_user,
-    truncate_preview,
+    credential_prompt_requests_password, truncate_preview,
 };
 use nyaterm_store::{ConnectionStore, StorageError, StoreDomain, store_request};
 use nyaterm_terminal::TerminalSnapshot;
 
 use crate::features::NyaTermApp;
 use crate::models::{
-    ConnectionPasswordTarget, CredentialAutofillMatchEvent, CredentialAutofillMatchOutcome,
+    ConnectionPasswordTarget, CredentialAutofillAction, CredentialAutofillMatchEvent,
     CredentialAutofillMatchRequest, CredentialAutofillMatchRequestKey, CredentialAutofillTarget,
-    CredentialSuggestionState, PendingCredentialAutofill,
+    CredentialSuggestionState, PendingCredentialAutofill, credential_autofill_action,
 };
 
 use super::command_suggestions::{
@@ -348,44 +348,50 @@ impl NyaTermApp {
         if !self.security.credentials().is_empty() {
             return true;
         }
-        let Some(session_id) = self.session.active_id() else {
-            return false;
-        };
-        let Some(connection_id) = self
-            .session
-            .metadata(session_id)
-            .and_then(|metadata| metadata.source_connection_id.as_deref())
-        else {
-            return false;
-        };
-        let Some(auth) = self
-            .connection_state
-            .connection_by_id(connection_id)
-            .and_then(|connection| connection.auth.as_ref())
-        else {
-            return false;
-        };
-        connection_has_resolvable_password(auth)
+        self.active_connection_login_username().is_some()
+            && self
+                .active_connection_auth()
+                .is_some_and(connection_has_resolvable_password)
+    }
+
+    /// The account the active session actually logs in as. Saved-account auth
+    /// can override the catalog connection's username at connect time, so a
+    /// prompt like `[sudo] password for root:` is compared against this, not
+    /// against the stored connection config.
+    fn active_connection_login_username(&self) -> Option<&str> {
+        let metadata = self.session.metadata(self.session.active_id()?)?;
+        metadata.launch_config.login_username()
+    }
+
+    fn active_connection_auth(&self) -> Option<&ConnectionAuth> {
+        self.active_connection()?.auth.as_ref()
+    }
+
+    /// The catalog connection the active session was started from, if any.
+    fn active_connection(&self) -> Option<&SavedConnection> {
+        let metadata = self.session.metadata(self.session.active_id()?)?;
+        let connection_id = metadata.source_connection_id.as_deref()?;
+        self.connection_state.connection_by_id(connection_id)
     }
 
     /// Synthesize a candidate for the active session's saved connection
     /// password. Only shell login types (SSH, Telnet) with a named login user
     /// and a resolvable password source qualify; RDP/VNC/Serial/Local do not.
-    /// When the prompt singles out a different account the connection password
-    /// is not offered at all.
+    /// The connection password is only ever a suggestion: it is sent when the
+    /// user picks it from the panel, never because the prompt appeared.
     fn credential_autofill_connection_password(
         &self,
         prompt_text: &str,
     ) -> Option<CredentialAutofillTarget> {
-        let session_id = self.session.active_id()?;
-        let connection_id = self
-            .session
-            .metadata(session_id)?
-            .source_connection_id
-            .as_deref()?;
-        let connection = self.connection_state.connection_by_id(connection_id)?;
-        let username = connection_login_username(&connection.config)?;
-        let auth = connection.auth.as_ref()?;
+        // A login password answers a password prompt only. `Password` prompt
+        // kind also covers PIN/OTP/verification/MFA challenges, which a saved
+        // credential may be configured for but a connection password is not an
+        // answer to.
+        if !credential_prompt_requests_password(prompt_text) {
+            return None;
+        }
+        let username = self.active_connection_login_username()?.to_string();
+        let auth = self.active_connection_auth()?;
         if !connection_has_resolvable_password(auth) {
             return None;
         }
@@ -394,6 +400,7 @@ impl NyaTermApp {
         {
             return None;
         }
+        let connection = self.active_connection()?;
         Some(CredentialAutofillTarget::ConnectionPassword(
             ConnectionPasswordTarget {
                 connection_id: connection.id.clone(),
@@ -494,8 +501,15 @@ impl NyaTermApp {
             return false;
         }
 
-        match event.outcome {
-            CredentialAutofillMatchOutcome::Suggest {
+        match credential_autofill_action(&event.outcome) {
+            CredentialAutofillAction::Send { target, kind } => {
+                self.terminal.assist.credential_autofill_pending = None;
+                self.terminal.assist.credential_autofill_buffer.clear();
+                self.terminal.assist.credential_autofill_recent.clear();
+                self.send_credential_value(&target, kind, &event.key.session_id, cx);
+                true
+            }
+            CredentialAutofillAction::Suggest {
                 kind,
                 matches,
                 clear_pending,
@@ -503,35 +517,15 @@ impl NyaTermApp {
                 if clear_pending {
                     self.terminal.assist.credential_autofill_pending = None;
                 }
-                // Auto-fill the saved connection password only when it is the
-                // sole candidate and the prompt addresses the connection's
-                // login user (e.g. `[sudo] password for root:`). A bare
-                // `Password:` or any competing credential still shows the panel.
-                let auto_fill = kind == CredentialPromptKind::Password
-                    && matches.len() == 1
-                    && matches[0].is_connection_password()
-                    && credential_password_prompt_targets_user(
-                        &event.key.prompt_text,
-                        matches[0].username(),
-                    );
-                if auto_fill {
-                    self.terminal.assist.credential_autofill_pending = None;
-                    self.terminal.assist.credential_autofill_buffer.clear();
-                    self.terminal.assist.credential_autofill_recent.clear();
-                    self.send_credential_value(&matches[0], kind, &event.key.session_id, cx);
-                } else {
-                    self.show_credential_panel(kind, matches, event.key.prompt_text, cx);
-                }
+                // Nothing is sent here. The connection password is a saved
+                // secret and the prompt that surfaced it is remote-controlled
+                // output, so it is only ever offered: `show_credential_panel`
+                // puts it in the list and `select_credential_suggestion` is the
+                // single place that fills it, behind a user action.
+                self.show_credential_panel(kind, matches, event.key.prompt_text, cx);
                 true
             }
-            CredentialAutofillMatchOutcome::AutoFill { credential, kind } => {
-                self.terminal.assist.credential_autofill_pending = None;
-                self.terminal.assist.credential_autofill_buffer.clear();
-                self.terminal.assist.credential_autofill_recent.clear();
-                self.send_credential_value(&credential, kind, &event.key.session_id, cx);
-                true
-            }
-            CredentialAutofillMatchOutcome::NoMatch { clear_pending } => {
+            CredentialAutofillAction::None { clear_pending } => {
                 if clear_pending {
                     self.terminal.assist.credential_autofill_pending = None;
                 }
@@ -993,33 +987,28 @@ impl NyaTermApp {
     }
 }
 
-/// The login account a connection shell uses, when the type defines one.
-/// Only SSH and Telnet can surface a sudo-style password prompt in a terminal.
-fn connection_login_username(config: &ConnectionType) -> Option<String> {
-    let username = match config {
-        ConnectionType::Ssh { username, .. } | ConnectionType::Telnet { username, .. } => username,
-        ConnectionType::LocalTerminal { .. }
-        | ConnectionType::Serial { .. }
-        | ConnectionType::Rdp { .. }
-        | ConnectionType::Vnc { .. } => return None,
-    };
-    let username = username.trim();
-    (!username.is_empty()).then(|| username.to_string())
-}
-
-/// Whether the connection has a password that can be resolved at fill time:
-/// an inline password (hydrated to plaintext by `get_connection`) or a
-/// reference to a saved account/password record. The catalog copy keeps an
-/// inline password as ciphertext with `has_password = true`, so candidate
-/// detection must not read `has_password`; the vault-locked case simply fails
-/// later with `MissingPassword`.
+/// Whether the connection has a password that can be resolved at fill time.
+/// Mirrors the resolution order in `resolve_connection_password_from_store` and
+/// the account rule in `ConnectionAuth::uses_account_password`, so a candidate
+/// is only offered when a store request can actually return a secret: an
+/// account reference counts only when the account supplies the password
+/// (`password_source == Account`, or the legacy shape with no inline
+/// password). A connection-owned password is a stored ciphertext the catalog
+/// keeps with `has_password = true` or a hydrated plaintext, so neither
+/// `has_password` nor the ciphertext value is a password to send. The
+/// vault-locked case simply fails later with `MissingPassword`.
 fn connection_has_resolvable_password(auth: &ConnectionAuth) -> bool {
-    auth.mode == "password"
-        && (auth.saved_account_id().is_some()
-            || auth
-                .password
-                .as_deref()
-                .is_some_and(|password| !password.trim().is_empty()))
+    if auth.mode != "password" {
+        return false;
+    }
+    if auth.uses_account_password() {
+        return auth.saved_account_id().is_some();
+    }
+    auth.has_password
+        || auth
+            .password
+            .as_deref()
+            .is_some_and(|password| !password.trim().is_empty())
 }
 
 /// Plaintext connection password carried inside the connection document after
@@ -1228,18 +1217,26 @@ fn credential_autofill_detect_prompt_kind(prompt: &str) -> Option<CredentialProm
 
 #[cfg(test)]
 mod tests {
-    use nyaterm_core::CredentialPromptKind;
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{
+        AiExecutionProfile, ConnectionAuth, ConnectionPasswordSource, ConnectionType,
+        CredentialPromptKind, SavedConnection,
+    };
+    use nyaterm_transport::SshSessionConfig;
 
     use super::{
         CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT, CredentialAutofillRuntimeBacklog,
         connection_auth_inline_password, connection_has_resolvable_password,
-        connection_login_username, credential_autofill_detect_prompt_kind,
-        credential_autofill_detection_should_run_this_tick,
+        credential_autofill_detect_prompt_kind, credential_autofill_detection_should_run_this_tick,
         credential_autofill_pending_detection_can_run,
         credential_autofill_prompt_line_from_viewport,
         credential_autofill_prompt_text_from_visible,
         credential_autofill_snapshot_detection_can_run, credential_autofill_visible_tail,
     };
+    use crate::features::NyaTermApp;
+    use crate::features::test_support::app_with_visible_local_session;
+    use crate::models::{ConnectionPasswordTarget, CredentialAutofillTarget, SessionLaunchConfig};
+    use crate::test_support::TestConfigDir;
 
     fn backlog(
         queued_output_bytes: usize,
@@ -1454,54 +1451,6 @@ mod tests {
     }
 
     #[test]
-    fn connection_login_username_requires_shell_login_types() {
-        use nyaterm_core::ConnectionType;
-        assert_eq!(
-            connection_login_username(&ConnectionType::Ssh {
-                host: "host".into(),
-                port: 22,
-                username: "root".into(),
-                backspace_mode: "del".into(),
-                ai_execution_profile: nyaterm_core::AiExecutionProfile::Auto,
-                x11_forwarding: false,
-                auth_agent_endpoint: None,
-                agent_forwarding_config: None,
-                legacy_agent_forwarding: None,
-                encoding: String::new(),
-                dynamic_tab_title: false,
-            }),
-            Some("root".to_string())
-        );
-        assert_eq!(
-            connection_login_username(&ConnectionType::Ssh {
-                host: "host".into(),
-                port: 22,
-                username: "  ".into(),
-                backspace_mode: "del".into(),
-                ai_execution_profile: nyaterm_core::AiExecutionProfile::Auto,
-                x11_forwarding: false,
-                auth_agent_endpoint: None,
-                agent_forwarding_config: None,
-                legacy_agent_forwarding: None,
-                encoding: String::new(),
-                dynamic_tab_title: false,
-            }),
-            None
-        );
-        assert_eq!(
-            connection_login_username(&ConnectionType::LocalTerminal {
-                shell_path: String::new(),
-                shell_args: String::new(),
-                working_dir: None,
-                ai_execution_profile: Default::default(),
-                encoding: String::new(),
-                dynamic_tab_title: false,
-            }),
-            None
-        );
-    }
-
-    #[test]
     fn connection_auth_inline_password_accepts_only_hydrated_plaintext() {
         use nyaterm_core::{ConnectionAuth, SecretString};
         let inline = ConnectionAuth {
@@ -1569,5 +1518,213 @@ mod tests {
             ..Default::default()
         };
         assert!(!connection_has_resolvable_password(&key_only));
+    }
+
+    #[test]
+    fn connection_has_resolvable_password_follows_password_source() {
+        use nyaterm_core::{ConnectionAuth, ConnectionPasswordSource, SecretString};
+        // The account is only the password when the source says so, so a
+        // connection that owns its password must not be offered a candidate
+        // that resolves to MissingPassword at fill time.
+        let account_reference_only = ConnectionAuth {
+            mode: "password".into(),
+            account_id: Some("account-1".into()),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            ..Default::default()
+        };
+        assert!(!connection_has_resolvable_password(&account_reference_only));
+
+        // ... but its own stored ciphertext is still a resolvable password.
+        let connection_owned = ConnectionAuth {
+            mode: "password".into(),
+            account_id: Some("account-1".into()),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            password: Some(SecretString::from("ciphertext")),
+            has_password: true,
+            ..Default::default()
+        };
+        assert!(connection_has_resolvable_password(&connection_owned));
+
+        // Account source without a saved account cannot be resolved.
+        let account_source_without_account = ConnectionAuth {
+            mode: "password".into(),
+            password_source: Some(ConnectionPasswordSource::Account),
+            ..Default::default()
+        };
+        assert!(!connection_has_resolvable_password(
+            &account_source_without_account
+        ));
+    }
+
+    const SESSION_ID: &str = "credential-autofill-session";
+
+    fn ssh_connection(username: &str, auth: Option<ConnectionAuth>) -> SavedConnection {
+        SavedConnection {
+            extensions: Default::default(),
+            tags: Vec::new(),
+            id: "conn-1".to_string(),
+            name: "prod".to_string(),
+            config: ConnectionType::Ssh {
+                host: "host".into(),
+                port: 22,
+                username: username.to_string(),
+                backspace_mode: "del".into(),
+                ai_execution_profile: AiExecutionProfile::Auto,
+                x11_forwarding: false,
+                auth_agent_endpoint: None,
+                agent_forwarding_config: None,
+                legacy_agent_forwarding: None,
+                encoding: String::new(),
+                dynamic_tab_title: false,
+            },
+            group_id: None,
+            description: None,
+            sort_order: 0,
+            icon: None,
+            icon_auto_detect: None,
+            auth,
+            recording: None,
+            ssh_algorithms: None,
+            ssh_profile: Default::default(),
+            terminal_type: None,
+            sftp: Default::default(),
+            network: None,
+            post_login: None,
+            asset: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            last_used_at_ms: None,
+        }
+    }
+
+    fn account_password_auth() -> ConnectionAuth {
+        ConnectionAuth {
+            mode: "password".into(),
+            account_id: Some("account-1".into()),
+            password_source: Some(ConnectionPasswordSource::Account),
+            ..Default::default()
+        }
+    }
+
+    /// An active SSH session whose login user came from the saved account, not
+    /// from the catalog connection: the config says `dev` while the session
+    /// really logged in as `root`.
+    fn app_with_account_backed_session(
+        cx: &mut TestAppContext,
+        root: &TestConfigDir,
+        connection: SavedConnection,
+        login_username: &str,
+    ) -> gpui::Entity<NyaTermApp> {
+        let app = app_with_visible_local_session(cx, root.path(), SESSION_ID);
+        cx.update_entity(&app, |app, _| {
+            let mut metadata = app
+                .session
+                .metadata(SESSION_ID)
+                .cloned()
+                .expect("fixture session metadata");
+            metadata.source_connection_id = Some(connection.id.clone());
+            metadata.launch_config = SessionLaunchConfig::Ssh(Box::new(SshSessionConfig {
+                username: login_username.to_string(),
+                ..SshSessionConfig::default()
+            }));
+            *app.session
+                .metadata_mut(SESSION_ID)
+                .expect("fixture session metadata") = metadata;
+            app.connection_state
+                .replace_loaded(vec![connection], Vec::new());
+        });
+        app
+    }
+
+    fn connection_password_candidate(
+        app: &gpui::Entity<NyaTermApp>,
+        cx: &mut TestAppContext,
+        prompt: &str,
+    ) -> Option<ConnectionPasswordTarget> {
+        let mut candidate = None;
+        cx.update_entity(app, |app, _| {
+            candidate = match app.credential_autofill_connection_password(prompt) {
+                Some(CredentialAutofillTarget::ConnectionPassword(target)) => Some(target),
+                Some(other) => panic!("unexpected candidate: {other:?}"),
+                None => None,
+            };
+        });
+        candidate
+    }
+
+    #[test]
+    fn connection_password_candidate_matches_the_effective_session_user() {
+        let root = TestConfigDir::new("nyaterm-credential-autofill-user");
+        let mut cx = TestAppContext::single();
+        // The catalog says `dev`; the saved account resolved the session to `root`.
+        let app = app_with_account_backed_session(
+            &mut cx,
+            &root,
+            ssh_connection("dev", Some(account_password_auth())),
+            "root",
+        );
+
+        let candidate = connection_password_candidate(&app, &mut cx, "[sudo] password for root:")
+            .expect("the session's own account is offered");
+        assert_eq!(candidate.connection_id, "conn-1");
+        assert_eq!(candidate.connection_name, "prod");
+        assert_eq!(candidate.username, "root");
+        assert!(
+            connection_password_candidate(&app, &mut cx, "[sudo] password for dev:").is_none(),
+            "the catalog username is not who the session logs in as"
+        );
+    }
+
+    #[test]
+    fn connection_password_candidate_is_refused_for_otp_style_prompts() {
+        let root = TestConfigDir::new("nyaterm-credential-autofill-otp");
+        let mut cx = TestAppContext::single();
+        let app = app_with_account_backed_session(
+            &mut cx,
+            &root,
+            ssh_connection("dev", Some(account_password_auth())),
+            "dev",
+        );
+
+        for prompt in [
+            "Verification code:",
+            "Enter PIN for dev:",
+            "OTP:",
+            "MFA code:",
+            "验证码：",
+        ] {
+            assert!(
+                connection_password_candidate(&app, &mut cx, prompt).is_none(),
+                "{prompt} must not offer a connection password"
+            );
+        }
+        assert!(
+            connection_password_candidate(&app, &mut cx, "Password:").is_some(),
+            "a real password prompt still offers the connection password"
+        );
+    }
+
+    #[test]
+    fn connection_password_candidate_requires_a_resolvable_password_source() {
+        let root = TestConfigDir::new("nyaterm-credential-autofill-source");
+        let mut cx = TestAppContext::single();
+        // The connection owns its password, so the account reference is not one.
+        let connection_owned_without_password = ConnectionAuth {
+            mode: "password".into(),
+            account_id: Some("account-1".into()),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            ..Default::default()
+        };
+        let app = app_with_account_backed_session(
+            &mut cx,
+            &root,
+            ssh_connection("dev", Some(connection_owned_without_password)),
+            "dev",
+        );
+
+        assert!(
+            connection_password_candidate(&app, &mut cx, "Password:").is_none(),
+            "an account reference is not a password when the connection owns it"
+        );
     }
 }
