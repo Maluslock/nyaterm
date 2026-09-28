@@ -185,7 +185,7 @@ impl NyaTermApp {
     fn title_file_menu_items(&self, cx: &mut Context<Self>) -> Vec<NyaMenuItem> {
         vec![
             NyaMenuItem::action(t!("menu.newWindow"))
-                .icon("icons/window/restore.svg")
+                .icon("icons/window/plus.svg")
                 .shortcut("Ctrl+Shift+N")
                 .on_click(cx.listener(|_, _, _, cx| {
                     cx.emit(crate::features::AppLifecycleEvent::NewWindowRequested);
