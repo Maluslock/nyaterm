@@ -1004,11 +1004,7 @@ fn connection_has_resolvable_password(auth: &ConnectionAuth) -> bool {
     if auth.uses_account_password() {
         return auth.saved_account_id().is_some();
     }
-    auth.has_password
-        || auth
-            .password
-            .as_deref()
-            .is_some_and(|password| !password.trim().is_empty())
+    auth.has_password || connection_auth_inline_password(auth).is_some()
 }
 
 /// Plaintext connection password carried inside the connection document after
@@ -1225,13 +1221,15 @@ mod tests {
     use nyaterm_transport::SshSessionConfig;
 
     use super::{
-        CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT, CredentialAutofillRuntimeBacklog,
-        connection_auth_inline_password, connection_has_resolvable_password,
-        credential_autofill_detect_prompt_kind, credential_autofill_detection_should_run_this_tick,
+        CREDENTIAL_AUTOFILL_INPUT_TAIL_LIMIT, ConnectionPasswordResolve,
+        CredentialAutofillRuntimeBacklog, connection_auth_inline_password,
+        connection_has_resolvable_password, credential_autofill_detect_prompt_kind,
+        credential_autofill_detection_should_run_this_tick,
         credential_autofill_pending_detection_can_run,
         credential_autofill_prompt_line_from_viewport,
         credential_autofill_prompt_text_from_visible,
         credential_autofill_snapshot_detection_can_run, credential_autofill_visible_tail,
+        resolve_connection_password_from_store,
     };
     use crate::features::NyaTermApp;
     use crate::features::test_support::app_with_visible_local_session;
@@ -1553,6 +1551,49 @@ mod tests {
         };
         assert!(!connection_has_resolvable_password(
             &account_source_without_account
+        ));
+    }
+
+    /// Covers the store half of the fill path against a real database: the
+    /// candidate gate above only inspects the catalog shape, so this pins that a
+    /// connection which is offered actually resolves to the plaintext the
+    /// terminal would receive, and that the payload is exactly the secret plus a
+    /// carriage return.
+    #[test]
+    fn connection_password_resolves_from_store_to_the_terminal_payload() {
+        use nyaterm_core::{ConnectionAuth, SecretString};
+        use nyaterm_store::ConnectionStore;
+
+        let root = crate::test_support::TestConfigDir::new("nyaterm-connection-password-fill");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        let connection = ssh_connection(
+            "root",
+            Some(ConnectionAuth {
+                mode: "password".into(),
+                // Hydrated shape: plaintext inline, catalog flag cleared.
+                password: Some(SecretString::from("s3cret")),
+                has_password: false,
+                ..Default::default()
+            }),
+        );
+        assert!(connection_has_resolvable_password(
+            connection.auth.as_ref().expect("auth")
+        ));
+        store.save_connection(&connection).expect("save connection");
+
+        let outcome = resolve_connection_password_from_store(&store, "conn-1")
+            .expect("resolve should not error");
+        let ConnectionPasswordResolve::Resolved(mut password) = outcome else {
+            panic!("hydrated inline password should resolve");
+        };
+        password.expose_secret_mut().push('\r');
+        assert_eq!(password.into_secret().into_bytes(), b"s3cret\r");
+
+        let missing = resolve_connection_password_from_store(&store, "nope")
+            .expect("resolve should not error");
+        assert!(matches!(
+            missing,
+            ConnectionPasswordResolve::MissingConnection
         ));
     }
 
