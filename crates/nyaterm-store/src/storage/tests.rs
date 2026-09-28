@@ -4648,6 +4648,115 @@ fn command_history_uses_legacy_table_and_normalizes_entries() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+#[test]
+fn command_history_merges_legacy_suggestion_rewrites_without_rewriting_raw_data() {
+    let dir = unique_temp_dir("suggestion-history-compat");
+    let store = ConnectionStore::open(&dir).expect("store");
+    let legacy = [
+        (
+            "command_history/00000000000000000010|legacy-1",
+            "\u{05}\u{15}ps -ef",
+            2,
+            10,
+        ),
+        (
+            "command_history/00000000000000000020|legacy-2",
+            "\u{05}\u{15}\u{05}\u{15}ps -ef",
+            3,
+            20,
+        ),
+    ];
+    let txn = store.db.begin_write().expect("write transaction");
+    for (key, command, use_count, last_used_at_ms) in legacy {
+        let mut record = serde_json::json!({
+            "command": command,
+            "last_used_at_ms": last_used_at_ms,
+            "use_count": use_count,
+        });
+        if key.ends_with("legacy-2") {
+            record["future_field"] = serde_json::json!({ "keep": true });
+        }
+        write_json_in_txn(&txn, COMMAND_HISTORY_TABLE, key, &record).expect("write legacy history");
+    }
+    txn.commit().expect("commit legacy history");
+
+    let raw_before_read = store
+        .list_raw_by_prefix(COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)
+        .expect("raw history");
+    assert_eq!(raw_before_read.len(), 2);
+
+    let history = store.list_command_history(1).expect("merged history");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].command, "ps -ef");
+    assert_eq!(history[0].use_count, 5);
+    assert_eq!(history[0].last_used_at_ms, 20);
+    assert_eq!(
+        store
+            .list_raw_by_prefix(COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)
+            .expect("raw history after read"),
+        raw_before_read
+    );
+
+    store
+        .append_command_history("ps -ef")
+        .expect("append canonical");
+    let history = store
+        .list_command_history(10)
+        .expect("merged after first append");
+    assert_eq!(history[0].use_count, 6);
+    assert!(history[0].last_used_at_ms >= 20);
+    assert_eq!(
+        store
+            .list_raw_by_prefix(COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)
+            .expect("raw history after append")
+            .len(),
+        3
+    );
+
+    store
+        .append_command_history("ps -ef")
+        .expect("append again");
+    let history = store.list_command_history(10).expect("merged after append");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].use_count, 7);
+
+    store
+        .delete_command_history("ps -ef")
+        .expect("delete all variants");
+    assert!(
+        store
+            .list_command_history(10)
+            .expect("history after delete")
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_raw_by_prefix(COMMAND_HISTORY_TABLE, COMMAND_HISTORY_PREFIX)
+            .expect("raw history after delete")
+            .is_empty()
+    );
+
+    store
+        .replace_command_history(&[
+            CommandHistoryEntry {
+                command: "\u{05}\u{15}ps -ef".to_string(),
+                last_used_at_ms: 30,
+                use_count: 2,
+            },
+            CommandHistoryEntry {
+                command: "ps -ef".to_string(),
+                last_used_at_ms: 40,
+                use_count: 4,
+            },
+        ])
+        .expect("import legacy backup history");
+    let imported = store.list_command_history(10).expect("imported history");
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0].command, "ps -ef");
+    assert_eq!(imported[0].use_count, 6);
+    assert_eq!(imported[0].last_used_at_ms, 40);
+}
+
 pub(super) fn unique_temp_dir(name: &str) -> TestTempDir {
     TestTempDir::new(&format!("nyaterm-core-{name}"))
 }

@@ -144,6 +144,14 @@ fn command_history_input_update(state: &mut TerminalInputState, text: &str) -> O
     submitted
 }
 
+fn command_suggestion_input(command: &str, execute: bool) -> (Vec<u8>, Option<String>) {
+    let mut payload = format!("\u{05}\u{15}{command}");
+    if execute {
+        payload.push('\r');
+    }
+    (payload.into_bytes(), execute.then(|| command.to_string()))
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn dismiss_command_suggestions(&mut self, cx: &mut Context<Self>) {
         self.terminal.assist.command_suggestion_search_gen = self
@@ -964,17 +972,14 @@ impl NyaTermApp {
         };
         let source = item.source.clone();
         let command = item.command;
-        // Tauri replaceCurrentLine path: Ctrl+E (end) + Ctrl+U (kill line) + command.
-        let mut payload = String::new();
-        payload.push('\u{05}'); // Ctrl+E
-        payload.push('\u{15}'); // Ctrl+U
-        payload.push_str(&command);
-        if execute {
-            payload.push('\r');
-        }
+        let (payload, submission) = command_suggestion_input(&command, execute);
         self.terminal.assist.command_input_tracker = TerminalInputState::new();
         self.terminal.assist.command_suggestions = None;
-        self.send_terminal_input_without_suggestion_track(payload.into_bytes(), cx);
+        self.terminal.assist.pending_command_history_entry = submission;
+        self.send_terminal_input_without_suggestion_track(payload, cx);
+        // A successful write consumes this in record_command_history_for_sessions.
+        // A failed primary write must not attach it to the next Enter.
+        self.terminal.assist.pending_command_history_entry = None;
         if !execute {
             // After fill, tracker becomes the filled command for continued typing.
             self.terminal.assist.command_input_tracker =
@@ -1559,13 +1564,18 @@ fn terminal_line_prefix_for_cell_col(line: &str, cell_col: usize) -> String {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use nyaterm_core::{TerminalInputState, apply_terminal_input_data};
+    use gpui::{AppContext as _, TestAppContext};
+    use nyaterm_core::{
+        AppRuntime, RuntimeMode, TerminalInputState, apply_terminal_input_data, uuid,
+    };
 
+    use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
+    use crate::features::NyaTermApp;
     use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
     use crate::models::{CommandSuggestionItem, CommandSuggestionState};
 
     use super::{
-        command_history_input_update, command_suggestion_clamp_selection,
+        command_history_input_update, command_suggestion_clamp_selection, command_suggestion_input,
         command_suggestion_input_can_defer_refresh, command_suggestion_input_candidate_chars,
         command_suggestion_input_obvious_pager_prefix, command_suggestion_item_for_selection,
         command_suggestion_refresh_input_delay, command_suggestion_state_changed,
@@ -1715,5 +1725,59 @@ mod tests {
 
         assert_eq!(submitted.as_deref(), Some("git status"));
         assert!(state.value.is_empty());
+    }
+
+    #[test]
+    fn executing_suggestion_records_plain_command_separately_from_wire_input() {
+        let (wire, submission) = command_suggestion_input("ps -ef", true);
+        assert_eq!(wire, b"\x05\x15ps -ef\r");
+        assert_eq!(submission.as_deref(), Some("ps -ef"));
+
+        let (wire, submission) = command_suggestion_input("ps -ef", false);
+        assert_eq!(wire, b"\x05\x15ps -ef");
+        assert!(submission.is_none());
+    }
+
+    #[test]
+    fn failed_suggestion_write_does_not_leave_a_pending_history_command() {
+        let mut cx = TestAppContext::single();
+        let root = std::env::temp_dir().join(format!(
+            "nyaterm-suggestion-write-{}-{}",
+            std::process::id(),
+            uuid()
+        ));
+        let runtime = AppRuntime::from_parts_for_test(
+            RuntimeMode::Portable,
+            root.clone(),
+            root.join("config"),
+            root.join("logs"),
+            root.join("cache"),
+            None,
+        );
+        let stores = UiStoreHandles {
+            startup_restore: cx.new(|_| StartupRestoreStore::default()),
+            overlays: cx.new(|_| OverlayStore::default()),
+        };
+        let app = cx.new(|cx| NyaTermApp::new(runtime, stores, cx));
+
+        cx.update_entity(&app, |app, cx| {
+            app.terminal.assist.command_suggestions = Some(CommandSuggestionState {
+                session_id: "missing".to_string(),
+                draft: "ps".to_string(),
+                items: vec![CommandSuggestionItem {
+                    command: "ps -ef".to_string(),
+                    display: "ps -ef".to_string(),
+                    source: "history".to_string(),
+                    score: 1,
+                    indices: Vec::new(),
+                }],
+                selected_index: Some(0),
+                cursor_row: 0,
+                cursor_col: 0,
+            });
+
+            assert!(app.apply_selected_command_suggestion(true, cx));
+            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
     }
 }
