@@ -56,7 +56,13 @@ env -u RUSTFLAGS cargo xwin build \
   --config "target.$TARGET.rustflags=[\"-C\",\"target-feature=+crt-static\"]"
 
 echo "== verify =="
-probe=$(ls dist/assets/*.js | head -1 | xargs basename)
+# No pipeline here: `ls | head -1` gives `ls` SIGPIPE, and `set -o pipefail`
+# turns that into a 141 that aborts the script right after a 10 minute build.
+probe=""
+for asset in dist/assets/*.js; do
+  probe=$(basename "$asset")
+  break
+done
 grep -aq -- "$probe" "$EXE" || { echo "FATAL: frontend assets not embedded ($probe missing)"; exit 1; }
 grep -aq -- "tmux control mode detected" "$EXE" || { echo "FATAL: tmux gateway strings missing"; exit 1; }
 grep -aq -- "tmux-cc-test" "$EXE" || { echo "FATAL: build tag missing"; exit 1; }
