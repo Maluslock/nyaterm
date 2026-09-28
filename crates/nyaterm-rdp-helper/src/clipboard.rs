@@ -291,7 +291,7 @@ impl ClipboardBridge {
         }
     }
 
-    fn advertise_current(&self) {
+    fn current_advertisement(&self) -> ClipboardMessage {
         if self.file_available.load(Ordering::SeqCst)
             && let Some(paths) = read_clipboard_paths().filter(|paths| !paths.is_empty())
             && let Ok(snapshot) = build_local_snapshot(&paths)
@@ -302,12 +302,20 @@ impl ClipboardBridge {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .set_local_snapshot(snapshot, hash);
-            self.send_clipboard_message(ClipboardMessage::SendInitiateFileCopy(descriptors));
-        } else if !self.local_text().is_empty() {
-            self.send_clipboard_message(ClipboardMessage::SendInitiateCopy(vec![
-                ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT),
-            ]));
+            ClipboardMessage::SendInitiateFileCopy(descriptors)
+        } else {
+            let formats = if self.local_text().is_empty() {
+                Vec::new()
+            } else {
+                vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
+            };
+            ClipboardMessage::SendInitiateCopy(formats)
         }
+    }
+
+    fn advertise_current(&self) {
+        // The initial CLIPRDR FormatList is required even when the clipboard is empty.
+        self.send_clipboard_message(self.current_advertisement());
     }
 }
 
@@ -569,8 +577,8 @@ impl CliprdrBackend for TextClipboardBackend {
 mod tests {
     use std::sync::mpsc;
 
-    use ironrdp_cliprdr::backend::CliprdrBackend;
-    use ironrdp_cliprdr::pdu::ClipboardGeneralCapabilityFlags;
+    use ironrdp_cliprdr::backend::{ClipboardMessage, CliprdrBackend};
+    use ironrdp_cliprdr::pdu::{ClipboardFormatId, ClipboardGeneralCapabilityFlags};
 
     use super::{ClipboardBridge, TextClipboardBackend};
     use nyaterm_remote_desktop::MAX_CLIPBOARD_TEXT_BYTES;
@@ -587,6 +595,23 @@ mod tests {
                 .is_err()
         );
         assert_eq!(bridge.local_text(), "hello");
+    }
+
+    #[test]
+    fn initial_clipboard_advertisement_includes_an_empty_format_list() {
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let bridge = ClipboardBridge::new("session".to_string(), output_tx, false);
+        assert!(matches!(
+            bridge.current_advertisement(),
+            ClipboardMessage::SendInitiateCopy(formats) if formats.is_empty()
+        ));
+
+        bridge.set_local_text("hello".to_string()).unwrap();
+        assert!(matches!(
+            bridge.current_advertisement(),
+            ClipboardMessage::SendInitiateCopy(formats)
+                if formats.len() == 1 && formats[0].id() == ClipboardFormatId::CF_UNICODETEXT
+        ));
     }
 
     #[test]
