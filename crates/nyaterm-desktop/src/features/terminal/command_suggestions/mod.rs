@@ -551,6 +551,10 @@ impl NyaTermApp {
             self.hide_command_suggestions_if_present(cx);
             return;
         }
+        if self.active_terminal_uses_alternate_screen() {
+            self.hide_command_suggestions_if_present(cx);
+            return;
+        }
 
         self.terminal.assist.command_suggestion_search_gen = self
             .terminal
@@ -663,6 +667,14 @@ impl NyaTermApp {
             timing.hide_popup = hide_started_at.elapsed();
             finish_refresh!("suppressed_or_credential", 0, 0);
         }
+        // A search scheduled on the shell line can land after a full-screen
+        // program has taken the alternate screen, so re-check here too.
+        if self.active_terminal_uses_alternate_screen() {
+            let hide_started_at = Instant::now();
+            self.hide_command_suggestions_if_present(cx);
+            timing.hide_popup = hide_started_at.elapsed();
+            finish_refresh!("alternate_screen", 0, 0);
+        }
         if !self
             .settings
             .summary()
@@ -740,6 +752,12 @@ impl NyaTermApp {
                 .interaction_command_suggestions_enabled
             || get_tracked_command(&self.terminal.assist.command_input_tracker) != request.pattern
         {
+            return;
+        }
+        // The search was started on the shell line, but a full-screen program
+        // may have taken the alternate screen while it ran.
+        if self.active_terminal_uses_alternate_screen() {
+            self.hide_command_suggestions_if_present(cx);
             return;
         }
         let CommandSuggestionSearchRequest {
@@ -1909,6 +1927,78 @@ mod tests {
                 app.terminal.assist.command_input_tracker,
                 TerminalInputState::new()
             );
+        });
+    }
+
+    #[test]
+    fn alternate_screen_blocks_the_manual_trigger_and_the_deferred_publisher() {
+        let dir = TestConfigDir::new("nyaterm-alt-screen-manual");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+
+        cx.update_entity(&app, |app, _| {
+            show_surface_for_session(app, "s1");
+            app.terminal
+                .append_session_text_or_create("s1", "UTF-8", "\u{1b}[?1049h");
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert!(app.active_terminal_uses_alternate_screen());
+            app.terminal.assist.command_input_tracker =
+                apply_terminal_input_data(&TerminalInputState::new(), "vim 1");
+
+            // An explicit trigger must not open the popup inside a full-screen
+            // program, even with a trackable shell-style line.
+            app.show_manual_command_suggestions(cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // A search deferred on the shell line would otherwise land after the
+            // program has taken the screen; the request must be dropped.
+            assert!(app.prepare_command_suggestion_search(1, cx).is_none());
+            assert!(app.terminal.assist.command_suggestions.is_none());
+        });
+    }
+
+    #[test]
+    fn alternate_screen_drops_a_search_that_was_already_in_flight() {
+        let dir = TestConfigDir::new("nyaterm-alt-screen-inflight");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+
+        let request = cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            assert!(!app.active_terminal_uses_alternate_screen());
+            app.terminal.assist.command_input_tracker =
+                apply_terminal_input_data(&TerminalInputState::new(), "vim 1");
+            app.prepare_command_suggestion_search(1, cx)
+                .expect("shell line should still build a request")
+        });
+
+        // The user starts a full-screen program while the search is running.
+        cx.update_entity(&app, |app, _| {
+            app.terminal
+                .append_session_text_or_create("s1", "UTF-8", "\u{1b}[?1049h");
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert!(app.active_terminal_uses_alternate_screen());
+            let results = vec![nyaterm_core::FuzzyResult {
+                command: "vim 1111".to_string(),
+                score: 1,
+                indices: Vec::new(),
+                source: "history".to_string(),
+                display: "vim 1111".to_string(),
+            }];
+            app.publish_command_suggestion_search(request, results, Duration::ZERO, cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
         });
     }
 
