@@ -304,17 +304,26 @@ impl ClipboardBridge {
                 .set_local_snapshot(snapshot, hash);
             ClipboardMessage::SendInitiateFileCopy(descriptors)
         } else {
-            let formats = if self.local_text().is_empty() {
-                Vec::new()
-            } else {
-                vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
-            };
-            ClipboardMessage::SendInitiateCopy(formats)
+            self.initial_advertisement()
         }
     }
 
-    fn advertise_current(&self) {
+    fn initial_advertisement(&self) -> ClipboardMessage {
+        let formats = if self.local_text().is_empty() {
+            Vec::new()
+        } else {
+            vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
+        };
+        ClipboardMessage::SendInitiateCopy(formats)
+    }
+
+    fn advertise_initial(&self) {
         // The initial CLIPRDR FormatList is required even when the clipboard is empty.
+        // File copy is valid only after IronRDP receives the FormatList response.
+        self.send_clipboard_message(self.initial_advertisement());
+    }
+
+    fn advertise_current(&self) {
         self.send_clipboard_message(self.current_advertisement());
     }
 }
@@ -342,12 +351,12 @@ impl CliprdrBackend for TextClipboardBackend {
     }
 
     fn on_ready(&mut self) {
-        self.on_request_format_list();
+        self.bridge.advertise_current();
         self.bridge.start_watcher();
     }
 
     fn on_request_format_list(&mut self) {
-        self.bridge.advertise_current();
+        self.bridge.advertise_initial();
     }
 
     fn on_process_negotiated_capabilities(
@@ -609,6 +618,22 @@ mod tests {
         bridge.set_local_text("hello".to_string()).unwrap();
         assert!(matches!(
             bridge.current_advertisement(),
+            ClipboardMessage::SendInitiateCopy(formats)
+                if formats.len() == 1 && formats[0].id() == ClipboardFormatId::CF_UNICODETEXT
+        ));
+    }
+
+    #[test]
+    fn initial_advertisement_uses_text_format_even_with_file_capability() {
+        let (output_tx, _output_rx) = mpsc::sync_channel(1);
+        let bridge = ClipboardBridge::new("session".to_string(), output_tx, true);
+        bridge.set_local_text("hello".to_string()).unwrap();
+        bridge
+            .file_available
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        assert!(matches!(
+            bridge.initial_advertisement(),
             ClipboardMessage::SendInitiateCopy(formats)
                 if formats.len() == 1 && formats[0].id() == ClipboardFormatId::CF_UNICODETEXT
         ));
