@@ -1118,6 +1118,7 @@
     "minimize": "最小化",
     "newLocalTerminal": "新增本機終端",
     "newSession": "新增工作階段",
+    "newWindow": "新增視窗",
     "newSshConnection": "新增 SSH 連線",
     "panels": "面板",
     "paste": "貼上",

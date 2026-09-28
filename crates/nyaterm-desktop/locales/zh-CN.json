@@ -1165,6 +1165,7 @@
     "minimize": "最小化",
     "newLocalTerminal": "新建本地终端",
     "newSession": "新建会话",
+    "newWindow": "新建窗口",
     "newSshConnection": "新建 SSH 连接",
     "panels": "面板",
     "paste": "粘贴",

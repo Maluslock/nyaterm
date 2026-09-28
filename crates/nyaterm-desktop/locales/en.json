@@ -1165,6 +1165,7 @@
     "minimize": "Minimize",
     "newLocalTerminal": "New Local",
     "newSession": "New Session",
+    "newWindow": "New Window",
     "newSshConnection": "New SSH",
     "panels": "Panels",
     "paste": "Paste",
