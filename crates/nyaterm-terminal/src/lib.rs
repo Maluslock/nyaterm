@@ -1290,6 +1290,37 @@ impl TerminalCore {
         dedup_overlapping_viewports(out, self.rows)
     }
 
+    /// Text and soft-wrap status for every row, oldest scrollback row first.
+    pub fn all_text_rows(&self) -> Vec<(String, bool)> {
+        let cols = self.term.columns();
+        let topmost = self.term.topmost_line();
+        let bottommost = self.term.bottommost_line();
+        let mut rows = Vec::with_capacity(self.total_rows());
+        for line_index in topmost.0..=bottommost.0 {
+            let line = Line(line_index);
+            let wrapped = cols > 0
+                && line > topmost
+                && self.term.grid()[Line(line_index - 1)][Column(cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE);
+            let mut text = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &self.term.grid()[line][Column(col)];
+                let cell_text = cell_text(cell);
+                if cell_text.is_empty() {
+                    if render_cell_width(cell) != 0 {
+                        text.push(' ');
+                    }
+                } else {
+                    text.push_str(&cell_text);
+                }
+            }
+            text.truncate(text.trim_end().len());
+            rows.push((text, wrapped));
+        }
+        rows
+    }
+
     pub fn search_grid(
         &self,
         query: &TerminalSearchQuery,

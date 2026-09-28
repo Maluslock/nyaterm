@@ -504,6 +504,31 @@ fn snapshots_mark_wrapped_continuation_rows() {
 }
 
 #[test]
+fn all_text_rows_preserve_wraps_across_scrollback_boundary() {
+    let mut screen = TerminalScreen::new(5, 2);
+    screen.advance(b"abcdef\r\nghij");
+
+    let rows = screen.all_text_rows();
+    assert_eq!(rows[0], ("abcde".to_string(), false));
+    assert_eq!(rows[1], ("f".to_string(), true));
+    assert_eq!(rows[2], ("ghij".to_string(), false));
+}
+
+#[test]
+fn all_text_rows_match_snapshot_text_for_wide_and_combining_cells() {
+    let mut screen = TerminalScreen::new(5, 2);
+    screen.advance("ab好e\u{301}f\r\ng".as_bytes());
+
+    let rows = screen.all_text_rows();
+    let snapshot = screen.viewport_snapshot_with_window(0, screen.scrollback_len(), 0);
+    assert_eq!(rows.len(), snapshot.row_count());
+    for (text_row, snapshot_row) in rows.iter().zip(snapshot.rows()) {
+        assert_eq!(&text_row.0, &snapshot_row.text);
+        assert_eq!(text_row.1, snapshot_row.wrapped);
+    }
+}
+
+#[test]
 fn changed_visible_lines_receive_timestamps() {
     let mut screen = TerminalScreen::new(20, 3);
     screen.advance(b"alpha\nbeta");
