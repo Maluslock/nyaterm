@@ -182,7 +182,7 @@ pub use terminal::file_drop::{
 };
 pub use terminal::input_fanout::terminal_input_fanout_status;
 pub use terminal::input_tracker::{
-    InputSelectionRange, TerminalInputState, apply_terminal_input_data,
+    InputSelectionRange, MAX_TRACKED_INPUT_BYTES, TerminalInputState, apply_terminal_input_data,
     apply_terminal_input_data_in_place, build_move_input_cursor_data, byte_index_to_char,
     can_register_command_from_tracker, can_suggest_from_tracked_command, can_suggest_from_tracker,
     char_index_to_byte, delete_terminal_input_range, get_tracked_command,

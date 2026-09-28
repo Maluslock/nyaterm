@@ -153,6 +153,22 @@ fn command_suggestion_input(command: &str, execute: bool) -> (Vec<u8>, Option<St
 }
 
 impl NyaTermApp {
+    /// Whether the active session's program is driving the alternate screen.
+    ///
+    /// Full-screen programs such as vim, less, top and nano own the keyboard
+    /// while they are there: their input is not a shell command line, so command
+    /// suggestions must stay closed and must never consume keys. This is a
+    /// protocol signal, unlike the submitted-command heuristic in
+    /// `command_starts_suggestion_suppressing_program`, which only covers
+    /// programs the shell line happened to reveal.
+    pub(in crate::features) fn active_terminal_uses_alternate_screen(&self) -> bool {
+        self.session
+            .active_id()
+            .filter(|session_id| !session_id.is_empty())
+            .and_then(|session_id| self.terminal.view.views.get(session_id))
+            .is_some_and(|view| view.protocol_state.alternate_screen)
+    }
+
     pub(in crate::features) fn dismiss_command_suggestions(&mut self, cx: &mut Context<Self>) {
         self.terminal.assist.command_suggestion_search_gen = self
             .terminal
@@ -233,6 +249,10 @@ impl NyaTermApp {
         if self.session.active_id().is_none() {
             self.clear_command_suggestion_draft(cx);
             return;
+        }
+        if self.active_terminal_uses_alternate_screen() {
+            self.clear_command_suggestion_draft(cx);
+            finish!("alternate_screen", 0);
         }
         let utf8_started_at = Instant::now();
         let text = match std::str::from_utf8(bytes) {
@@ -382,6 +402,12 @@ impl NyaTermApp {
         if self.terminal.assist.credential_suggestions.is_some()
             || self.is_credential_prompt_input_mode()
         {
+            return;
+        }
+        if self.active_terminal_uses_alternate_screen() {
+            // Full-screen programs own the keyboard; their input is not a shell
+            // command line, so nothing here may be recorded as command history.
+            self.terminal.assist.command_input_tracker = TerminalInputState::new();
             return;
         }
         let Ok(text) = std::str::from_utf8(bytes) else {
@@ -920,6 +946,13 @@ impl NyaTermApp {
             cx.notify();
             return false;
         }
+        if self.active_terminal_uses_alternate_screen() {
+            // The popup describes the shell line a full-screen program replaced.
+            // Drop it and let the program own every keystroke, including Escape.
+            self.terminal.assist.command_suggestions = None;
+            cx.notify();
+            return false;
+        }
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform || keystroke.modifiers.alt || keystroke.modifiers.control {
             return false;
@@ -1056,6 +1089,9 @@ impl NyaTermApp {
             return div().into_any_element();
         }
         if self.session.active_id() != Some(state.session_id.as_str()) {
+            return div().into_any_element();
+        }
+        if self.active_terminal_uses_alternate_screen() {
             return div().into_any_element();
         }
         let menu_w = 380.0_f32;
@@ -1564,7 +1600,7 @@ fn terminal_line_prefix_for_cell_col(line: &str, cell_col: usize) -> String {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::{AppContext as _, KeyDownEvent, TestAppContext};
     use nyaterm_core::{
         AppRuntime, RuntimeMode, TerminalInputState, apply_terminal_input_data, uuid,
     };
@@ -1573,6 +1609,7 @@ mod tests {
     use crate::features::NyaTermApp;
     use crate::features::terminal::terminal_runtime::TERMINAL_INPUT_LATENCY_WINDOW;
     use crate::models::{CommandSuggestionItem, CommandSuggestionState};
+    use crate::test_support::TestConfigDir;
 
     use super::{
         command_history_input_update, command_suggestion_clamp_selection, command_suggestion_input,
@@ -1778,6 +1815,128 @@ mod tests {
 
             assert!(app.apply_selected_command_suggestion(true, cx));
             assert!(app.terminal.assist.pending_command_history_entry.is_none());
+        });
+    }
+
+    fn escape_key_event() -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: "escape".to_string(),
+                key_char: None,
+            },
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    /// A visible surface makes the popup authoritative for the session, so the
+    /// key handler can only bail out for the reason under test.
+    fn show_surface_for_session(app: &mut NyaTermApp, session_id: &str) {
+        app.terminal.layout.session_surface_bounds.insert(
+            session_id.to_string(),
+            gpui::Bounds::new(
+                gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                gpui::size(gpui::px(800.0), gpui::px(600.0)),
+            ),
+        );
+    }
+
+    fn open_suggestions_popup(session_id: &str) -> CommandSuggestionState {
+        CommandSuggestionState {
+            session_id: session_id.to_string(),
+            draft: "1".to_string(),
+            items: vec![CommandSuggestionItem {
+                command: "1111".to_string(),
+                display: "1111".to_string(),
+                source: "history".to_string(),
+                score: 1,
+                indices: Vec::new(),
+            }],
+            selected_index: Some(0),
+            cursor_row: 0,
+            cursor_col: 0,
+        }
+    }
+
+    #[test]
+    fn alternate_screen_keeps_command_suggestions_from_intercepting_keys() {
+        let dir = TestConfigDir::new("nyaterm-alt-screen-suggestions");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            assert!(!app.active_terminal_uses_alternate_screen());
+
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            // Shell line: the popup owns Escape.
+            assert!(app.handle_command_suggestion_key(&escape_key_event(), cx));
+            assert!(app.terminal.assist.command_suggestions.is_none());
+        });
+
+        cx.update_entity(&app, |app, _| {
+            // A full-screen program (vim, less, top) takes over the terminal.
+            app.terminal
+                .append_session_text_or_create("s1", "UTF-8", "\u{1b}[?1049h");
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            assert!(app.active_terminal_uses_alternate_screen());
+
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            // Escape must reach the program instead of closing a stale popup.
+            assert!(!app.handle_command_suggestion_key(&escape_key_event(), cx));
+            assert!(app.terminal.assist.command_suggestions.is_none());
+
+            // Typing inside the program neither suggests nor records history.
+            app.note_command_suggestion_input(b"11", cx);
+            assert!(app.terminal.assist.command_suggestions.is_none());
+            assert_eq!(
+                app.terminal.assist.command_input_tracker,
+                TerminalInputState::new()
+            );
+
+            app.terminal.assist.command_input_tracker =
+                apply_terminal_input_data(&TerminalInputState::new(), "vim ");
+            app.note_command_history_input(b"a.txt\r");
+            assert!(app.terminal.assist.pending_command_history_entry.is_none());
+            assert_eq!(
+                app.terminal.assist.command_input_tracker,
+                TerminalInputState::new()
+            );
+        });
+    }
+
+    #[test]
+    fn leaving_the_alternate_screen_restores_shell_line_suggestions() {
+        let dir = TestConfigDir::new("nyaterm-alt-screen-return");
+        let mut cx = TestAppContext::single();
+        let app = crate::features::test_support::app_with_visible_local_session(
+            &mut cx,
+            dir.path(),
+            "s1",
+        );
+
+        cx.update_entity(&app, |app, _| {
+            app.terminal
+                .append_session_text_or_create("s1", "UTF-8", "\u{1b}[?1049h");
+        });
+        cx.update_entity(&app, |app, _| {
+            assert!(app.active_terminal_uses_alternate_screen());
+            app.terminal
+                .append_session_text_or_create("s1", "UTF-8", "\u{1b}[?1049l");
+        });
+
+        cx.update_entity(&app, |app, cx| {
+            show_surface_for_session(app, "s1");
+            assert!(!app.active_terminal_uses_alternate_screen());
+            app.terminal.assist.command_suggestions = Some(open_suggestions_popup("s1"));
+            assert!(app.handle_command_suggestion_key(&escape_key_event(), cx));
         });
     }
 }
