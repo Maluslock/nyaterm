@@ -29,6 +29,14 @@
     "invalidRegex": "正则表达式无效"
 },
   "about": {
+    "conpty": "本地终端 ConPTY",
+    "conptyBundled": "内置 ConPTY %{version}",
+    "conptyLastUsed": "上次使用：%{source}",
+    "conptyMixed": "内置 ConPTY %{version} + 系统 ConPTY",
+    "conptyNotStarted": "尚未启动",
+    "conptySystem": "系统 ConPTY",
+    "conptySystemFallback": "系统 ConPTY（内置版本失败）",
+    "conptyUnavailable": "不可用",
     "copySupportInfo": "复制全部",
     "supportInfo": "支持信息",
     "version": "软件版本",
@@ -1701,6 +1709,9 @@
     "used": "已使用"
   },
   "savedConnections": {
+    "sessionImportTitle": "导入会话",
+    "restoreBackupTitle": "恢复 NyaTerm 备份",
+    "restoreBackupDesc": "会替换当前配置及已保存的连接。",
     "auth": "认证",
     "baudRate": "波特率",
     "empty": "暂无已保存连接",

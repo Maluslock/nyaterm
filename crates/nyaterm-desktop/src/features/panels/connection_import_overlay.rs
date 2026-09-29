@@ -39,27 +39,13 @@ impl NyaTermApp {
                 div()
                     .text_xs()
                     .text_color(rgb(palette.text_muted))
-                    .child(t!("savedConnections.importSelectSource")),
+                    .child(t!("savedConnections.sessionImportTitle")),
             )
             .child(
                 div()
                     .grid()
                     .grid_cols(if narrow { 2 } else { 3 })
                     .gap_3()
-                    .child(import_source_card(
-                        palette,
-                        "connection-import-nyaterm",
-                        "nyaterm",
-                        "NyaTerm",
-                        ".nya",
-                        cx.listener(|this, _, window, cx| {
-                            this.select_connection_import_source(
-                                ConnectionImportSource::NyatermBackup,
-                                window,
-                                cx,
-                            );
-                        }),
-                    ))
                     .child(import_source_card(
                         palette,
                         "connection-import-xshell",
@@ -225,6 +211,69 @@ impl NyaTermApp {
                         }),
                     )),
             )
+            .child(
+                div()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(rgb(palette.border))
+                    .pt_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight(600.))
+                            .text_color(rgb(palette.text))
+                            .child(t!("savedConnections.restoreBackupTitle")),
+                    )
+                    .child(
+                        div()
+                            .id("connection-import-nyaterm")
+                            .w_full()
+                            .min_h(px(72.))
+                            .p_3()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(rgb(palette.border))
+                            .cursor_pointer()
+                            .hover(move |this| {
+                                this.border_color(rgb(palette.primary))
+                                    .bg(rgb(palette.hover))
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.select_connection_import_source(
+                                    ConnectionImportSource::NyatermBackup,
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .child(nyaterm_app_icon(palette, 32.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight(600.))
+                                            .text_color(rgb(palette.text))
+                                            .child("NyaTerm (.nya)"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(palette.text_muted))
+                                            .child(t!("savedConnections.restoreBackupDesc")),
+                                    ),
+                            ),
+                    ),
+            )
     }
 }
 
@@ -258,9 +307,7 @@ pub(in crate::features::panels) fn import_source_card(
         .cursor_pointer()
         .hover(move |this| this.border_color(rgb(palette.primary)).bg(hover))
         .on_click(on_click)
-        .child(if icon == "nyaterm" {
-            nyaterm_app_icon(palette, 40.).into_any_element()
-        } else if icon.starts_with("color/") {
+        .child(if icon.starts_with("color/") {
             // Vendor logos are full-color rasters; they cannot go through svg().
             color_icon(icon, 40.).into_any_element()
         } else {

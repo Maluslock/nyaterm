@@ -248,6 +248,7 @@ def read_rpm_member(path: Path, member: str) -> bytes:
 def verify_windows_portable(path: Path, target: str, version: str) -> None:
     root = "NyaTerm-portable"
     executables = ["NyaTerm.exe", *helper_filenames(target)]
+    conpty_files = package_native.conpty_files(target)
     required = {
         f"{root}/{name}" for name in executables
     } | {
@@ -255,6 +256,8 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
         f"{root}/LICENSE",
         f"{root}/VERSION",
         f"{root}/data/.keep",
+        f"{root}/conpty/LICENSE.txt",
+        *(f"{root}/conpty/{relative.as_posix()}" for relative in conpty_files),
     }
     with zipfile.ZipFile(path) as archive:
         names = verify_zip_paths(archive)
@@ -266,6 +269,10 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
             raise RuntimeError(f"{path.name} contains version {packaged_version}, expected {version}")
         binaries = {name: archive.read(f"{root}/{name}") for name in executables}
         machines = {name: pe_machine(data) for name, data in binaries.items()}
+        conpty_machines = {
+            relative: pe_machine(archive.read(f"{root}/conpty/{relative.as_posix()}"))
+            for relative in conpty_files
+        }
         verify_windows_application_binary(binaries["NyaTerm.exe"], path.name)
     expected_machine = {
         "x86_64-pc-windows-msvc": 0x8664,
@@ -276,6 +283,17 @@ def verify_windows_portable(path: Path, target: str, version: str) -> None:
             raise RuntimeError(
                 f"{path.name} contains PE machine 0x{machine:04x} for {name}, "
                 f"expected 0x{expected_machine:04x}"
+            )
+    verify_conpty_machines(conpty_machines, path.name)
+
+
+def verify_conpty_machines(machines: dict[Path, int], artifact: str) -> None:
+    for relative, actual in machines.items():
+        expected = 0xAA64 if "arm64" in relative.parts else 0x8664
+        if actual != expected:
+            raise RuntimeError(
+                f"{artifact} contains ConPTY PE machine 0x{actual:04x} for {relative}, "
+                f"expected 0x{expected:04x}"
             )
 
 
@@ -369,7 +387,11 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        names = {candidate.name for candidate in output.rglob("*") if candidate.is_file()}
+        files = {
+            candidate.relative_to(output).as_posix(): candidate
+            for candidate in output.rglob("*") if candidate.is_file()
+        }
+        names = {candidate.name for candidate in files.values()}
         version_files = list(output.rglob("VERSION"))
         if len(version_files) != 1 or version_files[0].read_text(encoding="utf-8").strip() != version:
             raise RuntimeError(f"{path.name} contains the wrong installed version")
@@ -378,6 +400,17 @@ def verify_windows_installer(path: Path, target: str, version: str) -> None:
     missing = required - names
     if missing:
         raise RuntimeError(f"{path.name} is missing installed files: {', '.join(sorted(missing))}")
+    conpty_required = [
+        f"conpty/{relative.as_posix()}" for relative in package_native.conpty_files(target)
+    ] + ["conpty/LICENSE.txt"]
+    missing_conpty = set(conpty_required) - files.keys()
+    if missing_conpty:
+        raise RuntimeError(f"{path.name} is missing ConPTY files: {', '.join(sorted(missing_conpty))}")
+    verify_conpty_machines(
+        {relative: pe_machine(files[f"conpty/{relative.as_posix()}"].read_bytes())
+         for relative in package_native.conpty_files(target)},
+        path.name,
+    )
 
 
 def verify_macos_archive(path: Path, target: str, version: str) -> None:

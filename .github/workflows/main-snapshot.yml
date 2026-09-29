@@ -73,6 +73,7 @@ jobs:
         run: >-
           python -m unittest
           scripts.tests.test_check_release_assets
+          scripts.tests.test_prepare_conpty
           scripts.tests.test_package_native
           scripts.tests.test_verify_native_package
           scripts.tests.test_generate_release_metadata
@@ -130,6 +131,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/ci/install-nsis.ps1
+      - name: Prepare bundled ConPTY
+        if: runner.os == 'Windows'
+        run: python scripts/release/prepare_conpty.py
       - name: Package native application
         shell: bash
         env:

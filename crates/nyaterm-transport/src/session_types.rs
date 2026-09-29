@@ -67,6 +67,12 @@ pub struct SessionDrain {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error(
+        "Local Terminal requires Windows 10 version 1809 (Build 17763) or later; current build: {build}"
+    )]
+    UnsupportedWindowsBuild { build: u32 },
+    #[error("Unable to determine Windows version before starting Local Terminal")]
+    WindowsVersionUnavailable,
     #[error("session not found: {0}")]
     NotFound(String),
     #[error("failed to open PTY: {0}")]

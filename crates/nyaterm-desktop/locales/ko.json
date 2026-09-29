@@ -29,6 +29,14 @@
     "invalidRegex": "잘못된 정규식"
 },
   "about": {
+    "conpty": "로컬 터미널 ConPTY",
+    "conptyBundled": "내장 ConPTY %{version}",
+    "conptyLastUsed": "마지막 사용: %{source}",
+    "conptyMixed": "내장 ConPTY %{version} + 시스템 ConPTY",
+    "conptyNotStarted": "시작 전",
+    "conptySystem": "시스템 ConPTY",
+    "conptySystemFallback": "시스템 ConPTY (내장 버전 실패)",
+    "conptyUnavailable": "사용할 수 없음",
     "copySupportInfo": "모두 복사",
     "supportInfo": "지원 정보",
     "version": "버전",
@@ -1654,6 +1662,9 @@
     "used": "사용됨"
   },
   "savedConnections": {
+    "sessionImportTitle": "세션 가져오기",
+    "restoreBackupTitle": "NyaTerm 백업 복원",
+    "restoreBackupDesc": "현재 설정과 저장된 연결을 교체합니다.",
     "auth": "인증",
     "baudRate": "보드레이트",
     "empty": "저장된 연결이 없습니다",

@@ -8,6 +8,36 @@ use crate::features::NyaTermApp;
 use crate::features::shell::gpui_code_font_family;
 use crate::features::view_widgets::nyaterm_app_icon;
 
+#[cfg(windows)]
+fn conpty_display() -> String {
+    use nyaterm_transport::local_conpty::{BUNDLED_VERSION, Backend, status};
+
+    let status = status();
+    let bundled = t!("about.conptyBundled", version = BUNDLED_VERSION).to_string();
+    let system = if status.fallback {
+        t!("about.conptySystemFallback").to_string()
+    } else {
+        t!("about.conptySystem").to_string()
+    };
+    if !status.available {
+        t!("about.conptyUnavailable").to_string()
+    } else if status.active_bundled > 0 && status.active_system > 0 {
+        t!("about.conptyMixed", version = BUNDLED_VERSION).to_string()
+    } else if status.active_bundled > 0 {
+        bundled
+    } else if status.active_system > 0 {
+        system
+    } else if let Some(last) = status.last_used {
+        let source = match last {
+            Backend::Bundled => bundled,
+            Backend::System => system,
+        };
+        t!("about.conptyLastUsed", source = source).to_string()
+    } else {
+        t!("about.conptyNotStarted").to_string()
+    }
+}
+
 impl NyaTermApp {
     pub(in crate::features) fn open_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_nya_dialog(cx) {
@@ -25,7 +55,7 @@ impl NyaTermApp {
 
     fn about_dialog_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.theme_palette();
-        let support_info = format!(
+        let mut support_info = format!(
             "NyaTerm {}\nOS: {}\nArchitecture: {}\nMode: {:?}",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
@@ -36,7 +66,7 @@ impl NyaTermApp {
             RuntimeMode::Portable => t!("about.portable"),
             RuntimeMode::Installed => t!("about.installed"),
         };
-        let support_rows = [
+        let mut support_rows = vec![
             (t!("about.version"), env!("CARGO_PKG_VERSION").to_string()),
             (
                 t!("about.operatingSystem"),
@@ -45,6 +75,12 @@ impl NyaTermApp {
             (t!("about.architecture"), std::env::consts::ARCH.to_string()),
             (t!("about.runtime"), runtime_label.to_string()),
         ];
+        #[cfg(windows)]
+        {
+            let display = conpty_display();
+            support_info.push_str(&format!("\nLocal Terminal ConPTY: {display}"));
+            support_rows.push((t!("about.conpty"), display));
+        }
         div()
             .id("about-dialog-content")
             .debug_selector(|| "about-dialog-content".to_string())

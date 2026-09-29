@@ -17,6 +17,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import prepare_conpty
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DIST_DIR = ROOT_DIR / "dist"
@@ -30,6 +32,34 @@ APP_BIN = "nyaterm"
 # in nyaterm-remote-desktop only looks beside the running executable, so each
 # of these must be packaged next to the application binary in every format.
 HELPER_BINS = ("nyaterm-rdp-helper", "nyaterm-vnc-helper", "nyaterm-mcp")
+CONPTY_LICENSE = Path(__file__).with_name("conpty-license.txt")
+
+
+def conpty_files(target: str) -> tuple[Path, ...]:
+    if target == "x86_64-pc-windows-msvc":
+        return (Path("x64/conpty.dll"), Path("x64/x64/OpenConsole.exe"), Path("x64/arm64/OpenConsole.exe"))
+    if target == "aarch64-pc-windows-msvc":
+        return (Path("arm64/conpty.dll"), Path("arm64/arm64/OpenConsole.exe"))
+    raise ValueError(f"ConPTY is only packaged for Windows targets: {target}")
+
+
+def copy_conpty(destination: Path, target: str) -> list[Path]:
+    source_root = prepare_conpty.STAGING / "resources" / "windows" / "conpty"
+    copied = []
+    for relative in conpty_files(target):
+        source = source_root / relative
+        if not source.is_file():
+            raise FileNotFoundError(f"prepared ConPTY file not found: {source}")
+        output = destination / "conpty" / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, output)
+        copied.append(output)
+    license_output = destination / "conpty" / "LICENSE.txt"
+    shutil.copy2(CONPTY_LICENSE, license_output)
+    copied.append(license_output)
+    return copied
+
+
 PORTABLE_MARKER = "nyaterm-portable"
 
 
@@ -281,6 +311,10 @@ def nsis_path(path: Path) -> str:
     return str(path.resolve()).replace("/", "\\")
 
 
+def nsis_relative_path(path: Path) -> str:
+    return path.as_posix().replace("/", "\\")
+
+
 def find_makensis() -> str:
     found = shutil.which("makensis") or shutil.which("makensis.exe")
     if found:
@@ -296,6 +330,7 @@ def create_windows_packages(
     portable_root.mkdir()
     shutil.copy2(binary, portable_root / "NyaTerm.exe")
     copy_helpers(portable_root, info.target)
+    copy_conpty(portable_root, info.target)
     (portable_root / PORTABLE_MARKER).touch()
     (portable_root / "data").mkdir()
     (portable_root / "data" / ".keep").touch()
@@ -309,6 +344,7 @@ def create_windows_packages(
     installer_root.mkdir()
     shutil.copy2(binary, installer_root / "NyaTerm.exe")
     installer_helpers = copy_helpers(installer_root, info.target)
+    installer_conpty = copy_conpty(installer_root, info.target)
     copy_release_documents(installer_root, version)
     shutil.copy2(ICON_DIR / "icon.ico", installer_root / "icon.ico")
 
@@ -318,6 +354,24 @@ def create_windows_packages(
     )
     helper_uninstall = nsis_indent.join(
         f'Delete "$INSTDIR\\{path.name}"' for path in installer_helpers
+    )
+    conpty_install = nsis_indent.join(
+        f'SetOutPath "$INSTDIR\\{nsis_relative_path(path.parent.relative_to(installer_root))}"\n'
+        f'              File "{nsis_path(path)}"'
+        for path in installer_conpty
+    )
+    conpty_uninstall = nsis_indent.join(
+        f'Delete "$INSTDIR\\{nsis_relative_path(path.relative_to(installer_root))}"'
+        for path in installer_conpty
+    )
+    conpty_dirs = sorted(
+        {path.parent.relative_to(installer_root) for path in installer_conpty},
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    conpty_uninstall_dirs = nsis_indent.join(
+        f'RMDir "$INSTDIR\\{nsis_relative_path(path)}"'
+        for path in conpty_dirs
     )
 
     output = DIST_DIR / f"{APP_NAME}_{artifact_version}_{info.label}-setup.exe"
@@ -362,6 +416,7 @@ def create_windows_packages(
               File "{nsis_path(installer_root / 'LICENSE')}"
               File "{nsis_path(installer_root / 'VERSION')}"
               File "{nsis_path(installer_root / 'icon.ico')}"
+              {conpty_install}
               WriteUninstaller "$INSTDIR\Uninstall.exe"
               WriteRegStr HKCU "{identity.windows_registry_key}" "InstallDir" "$INSTDIR"
               WriteRegStr HKCU "Software\Classes\{identity.desktop_id}" "" "URL:{identity.display_name} Protocol"
@@ -383,6 +438,8 @@ def create_windows_packages(
               RMDir "$SMPROGRAMS\{identity.display_name}"
               Delete "$INSTDIR\NyaTerm.exe"
               {helper_uninstall}
+              {conpty_uninstall}
+              {conpty_uninstall_dirs}
               Delete "$INSTDIR\LICENSE"
               Delete "$INSTDIR\VERSION"
               Delete "$INSTDIR\icon.ico"

@@ -16,6 +16,7 @@ RELEASE_SCRIPTS = Path(__file__).resolve().parents[1] / "release"
 sys.path.insert(0, str(RELEASE_SCRIPTS))
 
 import verify_native_package  # noqa: E402
+import package_native  # noqa: E402
 
 
 def fake_pe(
@@ -58,7 +59,15 @@ def newc_entry(name: str, content: bytes) -> bytes:
     return entry + bytes((-len(entry)) % 4)
 
 
-def write_portable(path: Path, machine: int, *, helper_machine: int | None = None) -> None:
+def write_portable(
+    path: Path,
+    machine: int,
+    *,
+    helper_machine: int | None = None,
+    missing_conpty: str | None = None,
+    wrong_conpty_machine: bool = False,
+    target: str = "x86_64-pc-windows-msvc",
+) -> None:
     """Build a portable zip whose layout matches package_native's output."""
     root = "NyaTerm-portable"
     with zipfile.ZipFile(path, "w") as archive:
@@ -75,6 +84,15 @@ def write_portable(path: Path, machine: int, *, helper_machine: int | None = Non
         archive.writestr(f"{root}/LICENSE", b"license")
         archive.writestr(f"{root}/VERSION", b"2.0.0\n")
         archive.writestr(f"{root}/data/.keep", b"")
+        archive.writestr(f"{root}/conpty/LICENSE.txt", b"license")
+        for relative in package_native.conpty_files(target):
+            if relative.as_posix() == missing_conpty:
+                continue
+            expected = 0xAA64 if "arm64" in relative.parts else 0x8664
+            archive.writestr(
+                f"{root}/conpty/{relative.as_posix()}",
+                fake_pe(0xAA64 if wrong_conpty_machine else expected),
+            )
 
 
 class VerifyNativePackageTests(unittest.TestCase):
@@ -92,6 +110,17 @@ class VerifyNativePackageTests(unittest.TestCase):
                 path, "x86_64-pc-windows-msvc", "2.0.0"
             )
 
+    def test_windows_arm64_portable_has_matching_conpty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portable.zip"
+            write_portable(
+                path, 0xAA64, helper_machine=0xAA64,
+                target="aarch64-pc-windows-msvc",
+            )
+            verify_native_package.verify_windows_portable(
+                path, "aarch64-pc-windows-msvc", "2.0.0"
+            )
+
     def test_windows_portable_rejects_wrong_architecture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "portable.zip"
@@ -106,6 +135,29 @@ class VerifyNativePackageTests(unittest.TestCase):
             path = Path(directory) / "portable.zip"
             write_portable(path, 0x8664)
             with self.assertRaisesRegex(RuntimeError, "nyaterm-rdp-helper.exe"):
+                verify_native_package.verify_windows_portable(
+                    path, "x86_64-pc-windows-msvc", "2.0.0"
+                )
+
+    def test_windows_portable_requires_conpty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portable.zip"
+            write_portable(
+                path, 0x8664, helper_machine=0x8664,
+                missing_conpty="x64/arm64/OpenConsole.exe",
+            )
+            with self.assertRaisesRegex(RuntimeError, "x64/arm64/OpenConsole.exe"):
+                verify_native_package.verify_windows_portable(
+                    path, "x86_64-pc-windows-msvc", "2.0.0"
+                )
+
+    def test_windows_portable_rejects_conpty_architecture_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "portable.zip"
+            write_portable(
+                path, 0x8664, helper_machine=0x8664, wrong_conpty_machine=True,
+            )
+            with self.assertRaisesRegex(RuntimeError, "ConPTY PE machine"):
                 verify_native_package.verify_windows_portable(
                     path, "x86_64-pc-windows-msvc", "2.0.0"
                 )

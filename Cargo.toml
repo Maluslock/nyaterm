@@ -84,7 +84,7 @@ nyaterm-terminal-gpui = { path = "crates/nyaterm-terminal-gpui" }
 nyaterm-transport = { path = "crates/nyaterm-transport" }
 nyaterm-ui = { path = "crates/nyaterm-ui" }
 percent-encoding = "=2.3.2"
-portable-pty = "0.9"
+portable-pty = { git = "https://github.com/nyakang/portable-pty", rev = "a3d41bc786d0c5941584abce105d8ecd0f035dcd" }
 quick-xml = "0.40"
 rand = { version = "0.10", features = ["thread_rng"] }
 redb = "4.1.0"

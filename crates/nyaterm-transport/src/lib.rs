@@ -1,5 +1,7 @@
 pub mod connection_attempt;
 pub mod download_path;
+#[cfg(windows)]
+pub mod local_conpty;
 pub mod network_route;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -814,6 +816,8 @@ impl SessionManager {
         &self,
         config: LocalSessionConfig,
     ) -> Result<SessionInfo, SessionError> {
+        #[cfg(windows)]
+        local_conpty::ensure_supported()?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let pty_system = native_pty_system();
         let pair = pty_system

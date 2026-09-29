@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import shutil
 import subprocess
 import struct
 import tarfile
@@ -8,6 +9,7 @@ from contextlib import contextmanager
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +32,11 @@ def staged_package(target: str):
         helpers = [binary.parent / f"{name}{suffix}" for name in package_native.HELPER_BINS]
         for helper in helpers:
             helper.write_bytes(b"helper")
+        if "windows" in target:
+            for relative in package_native.conpty_files(target):
+                path = root / "staging/resources/windows/conpty" / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"MZ")
 
         def run(command, **kwargs):
             if command[0] == "rpmbuild":
@@ -40,6 +47,7 @@ def staged_package(target: str):
         with (
             mock.patch.object(package_native, "WORK_DIR", root / "work"),
             mock.patch.object(package_native, "DIST_DIR", root / "dist"),
+            mock.patch.object(package_native.prepare_conpty, "STAGING", root / "staging"),
             mock.patch.object(package_native, "helper_binary_paths", return_value=helpers),
             mock.patch.object(package_native, "require_tool", side_effect=lambda name: name),
             mock.patch.object(package_native, "find_makensis", return_value="makensis"),
@@ -52,6 +60,25 @@ def staged_package(target: str):
 
 
 class PackageNativeTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("makensis"), "NSIS is not installed")
+    def test_windows_installer_with_conpty_compiles_with_nsis(self) -> None:
+        with staged_package("x86_64-pc-windows-msvc") as (root, binary, info):
+            with (
+                mock.patch.object(package_native, "find_makensis", return_value=shutil.which("makensis")),
+                mock.patch.object(
+                    package_native,
+                    "run",
+                    side_effect=lambda command: subprocess.run(
+                        command, check=True, capture_output=True, text=True
+                    ),
+                ),
+            ):
+                package_native.create_windows_packages(binary, info, "2.0.0", "2.0.0")
+            self.assertGreater(
+                (root / "dist/NyaTerm_2.0.0_windows_x64-setup.exe").stat().st_size,
+                1024,
+            )
+
     def test_semver_resolves_application_identity(self) -> None:
         for version in ("2.0.0", "2.0.1", "2.1.0", "2.0.0+build-with-hyphen"):
             self.assertEqual(package_native.release_identity(version), package_native.STABLE_IDENTITY)
@@ -265,6 +292,7 @@ class PackageNativeTests(unittest.TestCase):
             with (
                 mock.patch.object(package_native, "WORK_DIR", root / "work"),
                 mock.patch.object(package_native, "DIST_DIR", root / "dist"),
+                mock.patch.object(package_native.prepare_conpty, "STAGING", root / "staging"),
                 mock.patch.object(package_native, "run"),
                 mock.patch.object(package_native, "helper_binary_paths", return_value=[root / "build" / f"{name}.exe" for name in package_native.HELPER_BINS]),
                 mock.patch.object(
@@ -278,17 +306,36 @@ class PackageNativeTests(unittest.TestCase):
                 for path in package_native.helper_binary_paths(target):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(b"MZ")
+                for relative in package_native.conpty_files(target):
+                    path = root / "staging/resources/windows/conpty" / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"MZ")
                 package_native.create_windows_packages(
                     application, info, "2.0.0", "2.0.0"
                 )
                 script = (
                     package_native.WORK_DIR / "nyaterm-installer.nsi"
                 ).read_text(encoding="utf-8")
+                with zipfile.ZipFile(
+                    package_native.DIST_DIR / "NyaTerm_2.0.0_windows_x64_portable.zip"
+                ) as archive:
+                    portable_entries = set(archive.namelist())
         for name in package_native.HELPER_BINS:
             filename = f"{name}.exe"
             with self.subTest(helper=filename):
                 self.assertRegex(script, rf'File ".*{filename}"')
                 self.assertIn(f'Delete "$INSTDIR\\{filename}"', script)
+        for relative in package_native.conpty_files(target):
+            self.assertIn(str(relative.name), script)
+            self.assertIn(
+                f'Delete "$INSTDIR\\conpty\\{package_native.nsis_relative_path(relative)}"',
+                script,
+            )
+            self.assertIn(
+                f"NyaTerm-portable/conpty/{relative.as_posix()}", portable_entries
+            )
+        self.assertIn('Delete "$INSTDIR\\conpty\\LICENSE.txt"', script)
+        self.assertIn("NyaTerm-portable/conpty/LICENSE.txt", portable_entries)
         self.assertIn(
             r'WriteRegStr HKCU "Software\Classes\nyaterm" "URL Protocol" ""',
             script,

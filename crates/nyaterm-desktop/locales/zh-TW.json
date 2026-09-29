@@ -29,6 +29,14 @@
     "invalidRegex": "正規表示式無效"
 },
   "about": {
+    "conpty": "本機終端 ConPTY",
+    "conptyBundled": "隨附 ConPTY %{version}",
+    "conptyLastUsed": "上次使用：%{source}",
+    "conptyMixed": "隨附 ConPTY %{version} + 系統 ConPTY",
+    "conptyNotStarted": "尚未啟動",
+    "conptySystem": "系統 ConPTY",
+    "conptySystemFallback": "系統 ConPTY（隨附版本失敗）",
+    "conptyUnavailable": "無法使用",
     "copySupportInfo": "複製全部",
     "supportInfo": "支援資訊",
     "version": "軟體版本",
@@ -1654,6 +1662,9 @@
     "used": "已使用"
   },
   "savedConnections": {
+    "sessionImportTitle": "匯入工作階段",
+    "restoreBackupTitle": "還原 NyaTerm 備份",
+    "restoreBackupDesc": "會取代目前設定及已儲存的連線。",
     "auth": "身分驗證",
     "baudRate": "波特率",
     "empty": "暫無已儲存連線",

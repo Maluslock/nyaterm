@@ -29,6 +29,14 @@
     "invalidRegex": "無効な正規表現"
 },
   "about": {
+    "conpty": "ローカル端末 ConPTY",
+    "conptyBundled": "同梱 ConPTY %{version}",
+    "conptyLastUsed": "前回使用: %{source}",
+    "conptyMixed": "同梱 ConPTY %{version} + システム ConPTY",
+    "conptyNotStarted": "未起動",
+    "conptySystem": "システム ConPTY",
+    "conptySystemFallback": "システム ConPTY (同梱版の起動に失敗)",
+    "conptyUnavailable": "利用不可",
     "copySupportInfo": "すべてコピー",
     "supportInfo": "サポート情報",
     "version": "バージョン",
@@ -1659,6 +1667,9 @@
     "used": "使用中"
   },
   "savedConnections": {
+    "sessionImportTitle": "セッションをインポート",
+    "restoreBackupTitle": "NyaTerm バックアップを復元",
+    "restoreBackupDesc": "現在の設定と保存済み接続を置き換えます。",
     "auth": "認証",
     "baudRate": "ボーレート",
     "empty": "保存された接続がありません",

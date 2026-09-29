@@ -29,6 +29,14 @@
     "invalidRegex": "Invalid regular expression"
 },
   "about": {
+    "conpty": "Local Terminal ConPTY",
+    "conptyBundled": "Bundled ConPTY %{version}",
+    "conptyLastUsed": "Last used: %{source}",
+    "conptyMixed": "Bundled ConPTY %{version} + System ConPTY",
+    "conptyNotStarted": "Not started",
+    "conptySystem": "System ConPTY",
+    "conptySystemFallback": "System ConPTY (bundled failed)",
+    "conptyUnavailable": "Unavailable",
     "copySupportInfo": "Copy all",
     "supportInfo": "Support information",
     "version": "Version",
@@ -1701,6 +1709,9 @@
     "used": "Used"
   },
   "savedConnections": {
+    "sessionImportTitle": "Import sessions",
+    "restoreBackupTitle": "Restore NyaTerm backup",
+    "restoreBackupDesc": "Replaces current configuration and saved connections.",
     "auth": "Auth",
     "baudRate": "Baud rate",
     "empty": "No saved connections",

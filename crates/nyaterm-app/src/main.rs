@@ -35,6 +35,10 @@ fn main() -> anyhow::Result<()> {
     let activation_tx = instance_owner.activation_sender();
     let activation_rx = instance_owner.take_activation_receiver();
     let _log_guard = init_tracing(&runtime);
+    #[cfg(windows)]
+    if let Err(error) = nyaterm_transport::local_conpty::configure_from_executable() {
+        tracing::warn!(%error, "could not configure bundled ConPTY");
+    }
     nyaterm_desktop::preload_i18n()
         .map_err(anyhow::Error::msg)
         .context("preload translation catalogs")?;
