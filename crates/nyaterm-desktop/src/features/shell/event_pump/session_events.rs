@@ -535,7 +535,7 @@ impl NyaTermApp {
             drain_timings.decode += stage_duration;
             chunk_timings.decode += stage_duration;
             let stage_started_at = Instant::now();
-            let result = self.ai.process_agent_output(&text);
+            let result = self.ai.process_agent_output(&session_id, &text);
             let stage_duration = stage_started_at.elapsed();
             drain_timings.ai_capture += stage_duration;
             chunk_timings.ai_capture += stage_duration;
