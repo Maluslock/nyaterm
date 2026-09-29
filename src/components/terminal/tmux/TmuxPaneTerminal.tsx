@@ -149,6 +149,8 @@ export function TmuxPaneTerminal({
   }, [setShowSearchBar]);
 
   /** Read by the xterm key handler, which is installed once per terminal. */
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
   const findRef = useRef({
     open: openFind,
     close: handleCloseSearch,
@@ -170,7 +172,10 @@ export function TmuxPaneTerminal({
         event as CustomEvent<{ sessionId?: string; paneId?: string }>
       ).detail;
       if (!detail || detail.sessionId !== sessionId) return;
-      if (detail.paneId && detail.paneId !== paneIdRef.current) return;
+      const paneId = paneIdRef.current;
+      if (detail.paneId && detail.paneId !== paneId) return;
+      // The bar only shows on the active pane, and the menu can name any pane.
+      if (paneId) onSelectRef.current(paneId);
       findRef.current.open();
     };
     window.addEventListener(TMUX_PANE_FIND_EVENT, onFindRequested);
@@ -515,6 +520,9 @@ export function TmuxPaneTerminal({
       onMouseDown={handleMouseDown}
       onContextMenu={(event) => {
         event.preventDefault();
+        // WebKitGTK delivers no mouse-down for the right button, so the pane
+        // would stay unselected: select it here, the way tmux itself does.
+        if (pane.id) onSelect(pane.id);
         onContextMenu?.(pane.id, { x: event.clientX, y: event.clientY });
       }}
       className={`relative flex h-full w-full min-h-0 min-w-0 overflow-hidden bg-[var(--df-bg-terminal)] ${
