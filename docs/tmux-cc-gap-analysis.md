@@ -23,44 +23,37 @@ Utility / Widgets，README 仅一句 “Supports tmux integration”），所以
 
 ## 还差的（按价值/工作量排序）
 
-### A. 可点的操作面窄（部分已补，2026-09-29）
-已补：`Ctrl-b :` / 窗口条的终端按钮打开**tmux 命令行**（跑任意 tmux 命令，输出与 `%error`
-回显在输入框下方）；app 级注入（快捷命令、同步输入、AI agent）现在被改投到 tmux 认为活动的
-pane（见 `pane_for_app_write`），不再是"被 tmux 当命令解析"。
+### A. 可点的操作面（已补齐）
+分屏按钮（`-h`/`-v`）、窗口重命名（双击窗口条）、缩放、`select-layout` 下拉、分离、
+`Ctrl-b :` 命令行（带预设与 ↑/↓ 历史、回答与 `%error` 回显）、pane 右键菜单
+（查找 / 分左右 / 分上下 / 缩放 / 上下交换 / 独立成窗 / 关闭）。窗口条还会画 bell 与 activity 标记。
 
-仍缺（纯前端门面，后端 `tmux_gateway_command` 已够用）：
+仍缺：窗口列表浮层（`choose-tree` 的自绘版）——窗口条已经能点，浮层只是长列表下的便利。
 
-- 分屏按钮 / pane 右键菜单（`split-window`、`kill-pane`）——现在只能用命令行或 `Ctrl-b %`/`"`
-- 窗口重命名（`rename-window`）、移动窗口（`move-window`）——同上，命令行可用但没 UI
-- 窗口列表浮层（`choose-tree` 或自绘列表）
-- pane 活动的可视化（哪个 pane 是活动 pane 现在只有边框/光标的间接提示）
+### B. 拖分隔条改 pane 大小（已完成）
+分隔条把像素位移换算成单元格后发 `resize-pane -t %N -y/-x <n>`，布局仍以 tmux 为准回填；
+分隔条可 Tab 聚焦，方向键按格调整（`aria-valuenow` 报告比例）。
+真机验证：向上拖 43px 后 `%0` 15→13 行、向下拖回 15/14，镜像布局同步跟随。
 
-### B. 拖分隔条改 pane 大小（需要布局数学，半天级）
-分隔条目前是"镜子"：只能靠调整客户端尺寸整体缩放，拖某一条分隔线不会只改相邻两个 pane。
-要做需要像素↔单元格换算 + `resize-pane -L/-R/-U/-D <n>`，并对 `%layout-change` 做防抖回填。
+### C. 窗口状态可视化（已完成）
+- 窗口条有 bell / activity / zoomed（`resize-pane -Z` 按钮按下态）
+- `%message` 现在随快照下发（带递增序号，重复消息也算新消息），在窗口条上方淡出显示 6 秒
+  ——注意 tmux 3.2a 二进制里没有 `%message` 字符串，本机无法造出该通知；3.3+ 才发
+- 仍不画 tmux 状态行（WindTerm 可显示）
 
-### C. 窗口状态可视化（打磨级）
-- 窗口切换条上没有 bell / activity / zoomed 标记（要查 `#{window_flags}`）
-- `%message` 现在只进 debug 日志，没有像 tmux 状态行那样显示出来
-- 完全不画 tmux 状态行（WindTerm 可显示）
+### D. pane 内的搜索（已完成）
+pane 是本地 xterm，所以直接用 app 自己的搜索条与 SearchAddon：`Ctrl+Shift+F`
+（即 `terminal.find` 绑定，可改键）或 pane 右键菜单打开，`Esc` 关闭，
+支持大小写/整词/正则与命中计数，并复用"深度历史"（pane 的提交也会进会话历史）。
+tmux 自己的 copy-mode（`Ctrl-b [`）仍然可用，但找东西不再必须进它。
 
-### D. pane 内的搜索与复制模式 UI（打磨级）
-pane 是本地 xterm，本地回滚缓冲可用（滚轮能翻），但没有搜索框；`Ctrl-b [` 只能进 tmux 自己的
-copy-mode，没有键位提示或 UI 包装。
-
-### E. 与 nyaterm 自身能力的联动
+### E. 与 nyaterm 自身能力的联动（未做）
 - tmux pane 不参与"同步输入 / 广播"分组（普通终端的 `syncGroups` 到不了这里）
 - 录制 / 转写、崩溃或重连后自动回到 tmux 视图：未接
 - 会话恢复（`ui.open_tabs`）只恢复 SSH 会话，不恢复 tmux 视图
 
 ### F. 入口体验
-没有"检测到你敲了 `tmux -CC` 就提示/自动进入"或菜单项（此前约定不着急）。
-
-## 建议
-
-1. 先做 A：一次投入就能明显补平"能点的操作"，且不碰协议与布局。
-2. B 单独排期（唯一需要动几何换算的部分）。
-3. C/D/E/F 按需打磨。
+敲 `tmux -CC` 会被自动识别并接管（已实现，无需菜单）；没有额外的提示或菜单项（此前约定不着急）。
 
 ## 2026-09-29 已补
 
@@ -68,3 +61,23 @@ copy-mode，没有键位提示或 UI 包装。
 - app 级输入改投活动 pane（控制模式下写会话会被 tmux 当命令解析）
 - `Ctrl-b` 后需要 Shift 的组合（`"`、`%`、`:`）修复：前缀期间忽略纯修饰键
 - 分离/退出后焦点交还终端；普通终端在视图下持续挂着，提示符不丢
+- 窗口条：bell / activity / zoomed 标记、双击重命名、缩放按钮、`select-layout` 下拉
+- 分隔条可拖拽、可键盘调整（真机验证 15→13→15 行）
+- pane 右键菜单（含"查找"），右键会像 tmux 一样先选中该 pane
+- pane 内搜索（`Ctrl+Shift+F`）
+- `%message` 随快照下发并在窗口条上方显示
+- 终端实例被重建时 pane 画面会重新回放（此前会留下空白 pane）
+
+## 怎么验证（本机可复现）
+
+Linux + Xvfb `:99` + 本机 sshd（127.0.0.1:2222）+ `pnpm dev`（1420），debug 版按 deep link 打开：
+
+```bash
+cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
+  'nyaterm://connect/ssh?host=127.0.0.1&port=2222&username=user'
+```
+
+要点：X 窗口在 (160,100)、内容 1280x800，所以**前端坐标 + (160,100) 才是 xdotool 的屏幕坐标**；
+拖拽/右键这类指针验证必须先换算，否则事件落在别的元素上（曾因此误判"拖拽无效"）。
+`capture-pane` 之类的 tmux 查询用另一个 socket，别对 app 正在用的默认 socket 跑
+`tmux kill-server`（会连带杀掉 app 的 control client）。
