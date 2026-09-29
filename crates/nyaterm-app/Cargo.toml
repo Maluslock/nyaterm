@@ -14,8 +14,10 @@ gpui-kit.workspace = true
 gpui_platform.workspace = true
 nyaterm-core.workspace = true
 nyaterm-desktop.workspace = true
+nyaterm-store.workspace = true
 nyaterm-ui.workspace = true
 rust-embed.workspace = true
+serde_json.workspace = true
 
 tracing.workspace = true
 tracing-appender.workspace = true

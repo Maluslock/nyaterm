@@ -5,8 +5,8 @@ use nyaterm_core::{
     AccountAuthError, AiExecutionProfile, AssetAccelerator, AssetAcceleratorType, AssetDeviceType,
     AssetMetadata, CloudSyncSettings, CloudSyncState, CommandHistoryEntry, ConnectionAuth,
     ConnectionType, ExistingFileBehavior, MainWindowBounds, MainWindowState, OtpEntry,
-    RecordingMode, RecordingRotationPolicy, SavedCredential, SearchEngineConfig, SshKey,
-    export_quick_commands_json,
+    PortableSnapshotKind, RecordingMode, RecordingRotationPolicy, SavedCredential,
+    SearchEngineConfig, SshKey, export_quick_commands_json,
 };
 use redb::{Database, ReadableDatabase};
 use sha2::{Digest, Sha256};
@@ -667,6 +667,69 @@ fn exports_and_imports_portable_snapshot() {
 }
 
 #[test]
+fn sync_snapshot_preserves_local_secrets_history_device_settings_and_unknown_fields() {
+    let source_dir = unique_temp_dir("sync-projection-source");
+    let target_dir = unique_temp_dir("sync-projection-target");
+    let source = ConnectionStore::open(&source_dir).expect("source");
+    let target = ConnectionStore::open(&target_dir).expect("target");
+    source
+        .save_settings_value(&serde_json::json!({
+            "general":{"startup_behavior":"restore"},
+            "security":{"master_password":"source-secret"},
+            "cloud_sync":{"provider":"webdav","password":"source-cloud-secret"},
+            "ui":{"language":"en-US","left_width":410},
+            "future_source":{"value":1}
+        }))
+        .expect("source settings");
+    target
+        .save_settings_value(&serde_json::json!({
+            "general":{"startup_behavior":"empty"},
+            "security":{"master_password":"local-secret"},
+            "cloud_sync":{"provider":"s3","password":"local-cloud-secret"},
+            "ui":{"language":"zh-CN","left_width":260},
+            "future_local":{"value":2}
+        }))
+        .expect("target settings");
+    source
+        .append_command_history("remote-command")
+        .expect("source history");
+    target
+        .append_command_history("local-command")
+        .expect("target history");
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "source", "2.0.0")
+        .expect("build sync snapshot");
+    snapshot.recalculate_hash().expect("hash snapshot");
+    let exported_settings: serde_json::Value =
+        serde_json::from_str(&snapshot.entities["settings"]).expect("settings entity");
+    assert!(exported_settings.get("cloud_sync").is_none());
+    assert!(
+        exported_settings["security"]
+            .get("master_password")
+            .is_none()
+    );
+    assert!(exported_settings["ui"].get("left_width").is_none());
+    assert_eq!(snapshot.entities["history"], "[]");
+
+    target
+        .apply_raw_portable_snapshot(&snapshot)
+        .expect("apply sync");
+    let restored = target.load_settings_value().expect("restored settings");
+    assert_eq!(restored["general"]["startup_behavior"], "restore");
+    assert_eq!(restored["ui"]["language"], "en-US");
+    assert_eq!(restored["ui"]["left_width"], 260);
+    assert_eq!(restored["security"]["master_password"], "local-secret");
+    assert_eq!(restored["cloud_sync"]["password"], "local-cloud-secret");
+    assert_eq!(restored["future_local"]["value"], 2);
+    assert_eq!(restored["future_source"]["value"], 1);
+    assert_eq!(target.list_command_history(10).expect("history").len(), 1);
+    assert_eq!(
+        target.list_command_history(10).expect("history")[0].command,
+        "local-command"
+    );
+}
+
+#[test]
 fn encrypted_portable_snapshot_requires_master_password() {
     let source_dir = unique_temp_dir("portable-encrypted-source");
     let target_dir = unique_temp_dir("portable-encrypted-target");
@@ -964,6 +1027,92 @@ fn legacy_tauri_snapshot_reencrypts_settings_and_rewraps_master_key() {
     if let Some(parent) = snapshot_path.parent() {
         std::fs::remove_dir_all(parent).ok();
     }
+}
+
+#[test]
+fn legacy_tauri_cloud_pull_rewraps_vault_key_and_preserves_local_master_password() {
+    let source_dir = unique_temp_dir("legacy-cloud-source");
+    let target_dir = unique_temp_dir("legacy-cloud-target");
+    let source = ConnectionStore::open(&source_dir).expect("source");
+    source
+        .save_master_password(Some("shared-cloud-password"))
+        .expect("source master password");
+    source
+        .save_password(nyaterm_core::SavedPassword {
+            id: "legacy-secret".into(),
+            name: "Legacy".into(),
+            username: "user".into(),
+            password: Some("vault-value".into()),
+            has_password: false,
+        })
+        .expect("source password");
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "source", "1.2.10")
+        .expect("legacy sync snapshot");
+    snapshot.recalculate_hash().expect("hash");
+
+    let target = ConnectionStore::open(&target_dir).expect("target");
+    target
+        .save_master_password(Some("different-local-password"))
+        .expect("target master password");
+    target
+        .apply_cloud_sync_snapshot(&target_dir, &snapshot, "shared-cloud-password")
+        .expect("apply legacy cloud snapshot");
+    let imported = target
+        .load_decrypted_password_by_id("legacy-secret")
+        .expect("decrypt imported password")
+        .expect("imported password");
+    assert_eq!(imported.password.as_deref(), Some("vault-value"));
+    assert!(
+        target
+            .verify_master_password("different-local-password")
+            .expect("verify local password")
+    );
+}
+
+#[test]
+fn current_gpui_cloud_pull_rewraps_vault_key_for_local_master_password() {
+    let source_dir = unique_temp_dir("gpui-cloud-source");
+    let target_dir = unique_temp_dir("gpui-cloud-target");
+    let source = ConnectionStore::open(&source_dir).expect("source");
+    source
+        .save_master_password(Some("source-password"))
+        .expect("source master password");
+    source
+        .save_password(nyaterm_core::SavedPassword {
+            id: "shared-account".into(),
+            name: "Shared".into(),
+            username: "user".into(),
+            password: Some("shared-value".into()),
+            has_password: false,
+        })
+        .expect("source password");
+    let mut snapshot = source
+        .build_raw_portable_snapshot(PortableSnapshotKind::Sync, "source", "2.0.0")
+        .expect("GPUI sync snapshot");
+    snapshot.recalculate_hash().expect("hash");
+
+    let target = ConnectionStore::open(&target_dir).expect("target");
+    target
+        .save_master_password(Some("target-password"))
+        .expect("target master password");
+    target
+        .apply_cloud_sync_snapshot(&target_dir, &snapshot, "source-password")
+        .expect("apply GPUI cloud snapshot");
+    assert_eq!(
+        target
+            .load_decrypted_password_by_id("shared-account")
+            .expect("decrypt imported password")
+            .expect("imported password")
+            .password
+            .as_deref(),
+        Some("shared-value")
+    );
+    assert!(
+        target
+            .verify_master_password("target-password")
+            .expect("verify target password")
+    );
 }
 
 #[test]

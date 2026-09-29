@@ -1,6 +1,6 @@
 use gpui::Context;
 use nyaterm_core::{AiCommandCard, AppendAiAuditRequest, QuickCommand, QuickCommandCategory, uuid};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 use crate::models::QuickCommandVariablePromptState;
@@ -55,7 +55,7 @@ impl NyaTermApp {
         let response_preview = self.ai.chat_response_preview().to_string();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Commands, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Commands, move |store| {
                 let config = store.load_quick_commands()?;
                 let category_name = ai_command_card_category_name(&card);
                 let existing_category = config

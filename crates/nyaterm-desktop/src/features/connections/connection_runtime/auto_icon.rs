@@ -6,7 +6,7 @@
 
 use gpui::Context;
 use nyaterm_core::ConnectionType;
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 use nyaterm_transport::SystemInfo;
 
 use crate::features::{NyaTermApp, icons::infer_connection_icon_key_from_remote_system};
@@ -62,7 +62,7 @@ impl NyaTermApp {
         let icon_key = icon_key.to_string();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 store.save_connection(&persisted)?;
                 Ok(persisted)
             }),

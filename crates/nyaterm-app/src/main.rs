@@ -14,6 +14,9 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use single_instance::{SingleInstanceOutcome, acquire};
 
 fn main() -> anyhow::Result<()> {
+    if let Some(status) = nyaterm_store::run_cloud_snapshot_decode_helper_if_requested() {
+        std::process::exit(status);
+    }
     if nyaterm_desktop::run_update_helper_if_requested() {
         return Ok(());
     }

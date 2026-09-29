@@ -2537,6 +2537,8 @@
     "syncAutoCheckEdited": "已修改云端同步自动检查设置。",
     "syncAutoPushEdited": "已修改云端同步自动推送设置。",
     "syncAutoPullEdited": "已修改云端同步自动拉取设置。",
+    "syncRemoteAvailable": "远端更新可用。会话和设置空闲后将重新检查。",
+    "syncAutoFailed": "自动云同步失败：%{detail}。",
     "syncDebounceEdited": "已修改云端同步防抖设置。",
     "settingsClosed": "设置已关闭。",
     "translationSettingsEdited": "已修改翻译设置。",
