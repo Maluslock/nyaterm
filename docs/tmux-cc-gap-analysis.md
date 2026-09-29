@@ -81,3 +81,14 @@ cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
 拖拽/右键这类指针验证必须先换算，否则事件落在别的元素上（曾因此误判"拖拽无效"）。
 `capture-pane` 之类的 tmux 查询用另一个 socket，别对 app 正在用的默认 socket 跑
 `tmux kill-server`（会连带杀掉 app 的 control client）。
+
+### 验证时的坑（都是踩过的）
+
+| 坑 | 现象 | 规矩 |
+| --- | --- | --- |
+| 坐标空间不同 | 点在分隔条上却毫无反应 | 前端坐标 + 窗口位置 (160,100) = xdotool 屏幕坐标；先 `xdotool getwindowgeometry` 确认，别照抄上一次的数值 |
+| 抢 tmux 默认 socket | app 的 tmux 视图突然 `%exit`，会话丢失 | 探测一律 `tmux -L <私有名>`；只有确认 app 没在用时才碰默认 socket |
+| `pkill -f` 自匹配 | 把自己的 shell / 后台任务一起杀掉（SIGTERM） | 模式加方括号（`vite.j[s]`），或先 `pgrep` 拿 PID、确认命令行、在**另一条**命令里 kill |
+| 后台进程占住 stdout | 起服务的脚本一直不返回，工具调用超时 | 长驻进程用 `setsid ... >日志 2>&1 </dev/null &`，就绪用轮询端口判断，不用 `sleep` |
+| 中途重启长构建 | 只为改一行常量就重跑 15 分钟交叉编译 | 影响产物的常量（如 `BUILD_TAG`）在**开跑前**改好；构建期间只做只读验证 |
+| 从记忆里改文件 | `edit` 反复被拒（未读/已变），或补丁断言失败 | 改动前 `read` 目标片段；`read` 与 `edit` 之间不要跑 `prettier --write`；机械改写用脚本时也必须先重读 |
