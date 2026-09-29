@@ -660,7 +660,6 @@ impl NyaTermApp {
                             old_id: old_id.to_string(),
                             new_id: session_id.clone(),
                             connection_name: connection_name.clone(),
-                            session_name: session_info.name.clone(),
                             kind,
                             source_connection_id: source_connection_id.clone(),
                             workspace_split: workspace_split.clone(),
@@ -893,6 +892,7 @@ impl NyaTermApp {
         }
 
         self.migrate_reconnected_session_state(old_id, new_id, cx);
+        self.recording.rekey_session(old_id, new_id);
         self.remove_session_state(old_id, cx);
         self.persist_workspace_pane_layout();
         self.persist_terminal_window_layout();
@@ -917,10 +917,6 @@ impl NyaTermApp {
             short_id(new_id),
             completion.connection_name
         ));
-        if self.settings.summary().recording_auto_start {
-            self.recording
-                .schedule_auto_start(new_id.to_string(), completion.session_name);
-        }
         self.apply_workspace_split_for_duplicate(cx, completion.workspace_split, new_id);
         if let Some(startup_command) = completion.startup_command {
             self.schedule_startup_command(new_id.to_string(), startup_command, cx);

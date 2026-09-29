@@ -292,6 +292,7 @@ impl FileRecording {
 struct SessionCaptureState {
     recording: Option<FileRecording>,
     recording_state: RecordingStatusState,
+    disconnected: bool,
     dropped_bytes: u64,
     last_error: Option<String>,
     records: VecDeque<TranscriptRecord>,
@@ -302,6 +303,7 @@ struct SessionCaptureState {
     input_needs_terminal_resync: bool,
     input_before_tab: Option<String>,
     output_buffer: String,
+    provisional_raw_output: VecDeque<u8>,
     live_echo_buffer: String,
     submitted_line_echo: Option<String>,
     suppress_next_newline: bool,
@@ -313,6 +315,7 @@ impl SessionCaptureState {
         Self {
             recording: None,
             recording_state: RecordingStatusState::Recording,
+            disconnected: false,
             dropped_bytes: 0,
             last_error: None,
             records: VecDeque::new(),
@@ -323,6 +326,7 @@ impl SessionCaptureState {
             input_needs_terminal_resync: false,
             input_before_tab: None,
             output_buffer: String::new(),
+            provisional_raw_output: VecDeque::new(),
             live_echo_buffer: String::new(),
             submitted_line_echo: None,
             suppress_next_newline: false,
@@ -351,6 +355,7 @@ impl SessionCaptureState {
         self.last_error = None;
         self.dropped_bytes = 0;
         self.flush_output_lines(true);
+        self.provisional_raw_output.clear();
         self.recording = Some(FileRecording::new(file, file_path, profile, context));
         self.recording_state = RecordingStatusState::Recording;
         Ok(())
@@ -518,6 +523,22 @@ impl SessionCaptureState {
             }
             return;
         }
+        if self.recording.is_none() {
+            let bytes = data.as_bytes();
+            let keep = self.memory_limit_bytes.min(bytes.len());
+            if keep == self.memory_limit_bytes {
+                self.provisional_raw_output.clear();
+            }
+            self.provisional_raw_output
+                .extend(&bytes[bytes.len() - keep..]);
+            let excess = self
+                .provisional_raw_output
+                .len()
+                .saturating_sub(self.memory_limit_bytes);
+            if excess > 0 {
+                self.provisional_raw_output.drain(..excess);
+            }
+        }
         let mut sanitized = strip_terminal_control_sequences(data);
         if sanitized.is_empty() {
             return;
@@ -563,6 +584,53 @@ impl SessionCaptureState {
             self.last_error = Some(error.to_string());
         }
         self.recording = None;
+    }
+
+    fn disconnect(&mut self) {
+        if self.disconnected {
+            return;
+        }
+        self.disconnected = true;
+        self.commit_partial_input();
+        self.flush_output_lines(true);
+        self.pending_input_escape = None;
+        self.live_echo_buffer.clear();
+        self.submitted_line_echo = None;
+        self.suppress_next_newline = false;
+        self.append_record("SYSTEM", "Session disconnected".to_string());
+        if let Some(recording) = self.recording.as_mut()
+            && let Err(error) = recording.writer.flush()
+        {
+            self.mark_failed(error.to_string());
+        }
+    }
+
+    fn absorb_early_state(&mut self, mut early: Self) {
+        early.commit_partial_input();
+        early.flush_output_lines(true);
+        if let Some(recording) = self.recording.as_mut()
+            && recording.profile.mode == RecordingMode::Raw
+            && let Err(error) = recording.write_raw(early.provisional_raw_output.make_contiguous())
+        {
+            self.mark_failed(error.to_string());
+        }
+        if let Some(mut recording) = early.recording.take()
+            && let Err(error) = recording.finish()
+        {
+            self.mark_failed(error.to_string());
+        }
+        for mut record in early.records {
+            record.line_id = self.next_line_id;
+            self.next_line_id = self.next_line_id.saturating_add(1);
+            if let Some(recording) = self.recording.as_mut()
+                && let Err(error) = recording.write_record(&record)
+            {
+                self.mark_failed(error.to_string());
+            }
+            self.record_bytes += record.size_bytes;
+            self.records.push_back(record);
+            self.trim_records();
+        }
     }
 
     fn snapshot_records(&mut self) -> Vec<TranscriptRecord> {
@@ -965,6 +1033,28 @@ impl RecordingManager {
         if let Some(mut state) = removed {
             state.finish();
         }
+    }
+
+    pub fn disconnect_session(&self, session_id: &str) {
+        let mut sessions = lock_recover(&self.sessions);
+        if let Some(state) = sessions.get_mut(session_id) {
+            state.disconnect();
+        }
+    }
+
+    pub fn rekey_session(&self, old_session_id: &str, new_session_id: &str) {
+        if old_session_id == new_session_id {
+            return;
+        }
+        let mut sessions = lock_recover(&self.sessions);
+        let Some(mut previous) = sessions.remove(old_session_id) else {
+            return;
+        };
+        if let Some(early) = sessions.remove(new_session_id) {
+            previous.absorb_early_state(early);
+        }
+        previous.disconnected = false;
+        sessions.insert(new_session_id.to_string(), previous);
     }
 }
 
@@ -1678,6 +1768,112 @@ mod tests {
             .join(format!("nyaterm-recording-{name}-{nanos}.log"))
             .to_string_lossy()
             .to_string()
+    }
+
+    #[test]
+    fn transcript_survives_disconnect_and_multiple_rekeys() {
+        let manager = RecordingManager::new();
+        let path = unique_path("rekey-transcript");
+        manager.write_output("s1", "first\n");
+        manager.disconnect_session("s1");
+        manager.disconnect_session("s1");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("first"));
+        manager.rekey_session("s1", "s2");
+        manager.write_output("s2", "second\n");
+        manager.disconnect_session("s2");
+        manager.rekey_session("s2", "s3");
+        manager.write_output("s3", "third\n");
+        manager.save_transcript("s3", &path, true, false).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.find("first").unwrap() < text.find("second").unwrap());
+        assert!(text.find("second").unwrap() < text.find("third").unwrap());
+        assert_eq!(text.matches("[SYSTEM] Session disconnected").count(), 2);
+        manager.cleanup_session("s3");
+        manager.save_transcript("s3", &path, true, false).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recording_rekey_keeps_file_and_merges_early_output_without_crossing_sessions() {
+        let manager = RecordingManager::new();
+        let path = unique_path("rekey-file");
+        let other_path = unique_path("rekey-other");
+        let transcript_path = unique_path("rekey-merged");
+        manager.start("s1", &path, true, false).unwrap();
+        manager.write_output("s1", "before\n");
+        manager.write_output("other", "other pane\n");
+        manager.disconnect_session("s1");
+        manager.write_output("s2", "early banner\n");
+        manager.rekey_session("s1", "s2");
+        assert!(manager.status("s1").is_none());
+        assert!(manager.is_recording("s2"));
+        manager.write_output("s2", "after\n");
+        manager.stop("s2").unwrap();
+        manager
+            .save_transcript("s2", &transcript_path, true, false)
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.find("before").unwrap() < text.find("early banner").unwrap());
+        assert!(text.find("early banner").unwrap() < text.find("after").unwrap());
+        assert!(!text.contains("other pane"));
+        assert_eq!(fs::read_to_string(&transcript_path).unwrap(), text);
+        manager
+            .save_transcript("other", &other_path, true, false)
+            .unwrap();
+        assert!(
+            fs::read_to_string(&other_path)
+                .unwrap()
+                .contains("other pane")
+        );
+        manager.cleanup_session("s2");
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(other_path);
+        let _ = fs::remove_file(transcript_path);
+    }
+
+    #[test]
+    fn raw_recording_rekey_preserves_early_wire_output() {
+        let manager = RecordingManager::new();
+        let path = std::path::PathBuf::from(unique_path("raw-rekey"));
+        let profile = super::RecordingProfile {
+            mode: super::RecordingMode::Raw,
+            base_path: path.parent().unwrap().to_path_buf(),
+            path_template: path.file_name().unwrap().to_string_lossy().to_string(),
+            include_timestamps: false,
+            include_io_labels: false,
+            include_session_metadata: false,
+            rotation: super::RecordingRotationPolicy::Session,
+            existing_file_behavior: super::ExistingFileBehavior::Overwrite,
+            include_binary_transfer_payloads: false,
+        };
+        let context = super::RecordingContext {
+            session_id: "s1".to_string(),
+            session_name: "session".to_string(),
+            connection_id: None,
+            connection_name: None,
+            group_path: None,
+            protocol: "terminal".to_string(),
+            host: None,
+            port: None,
+            username: None,
+            started_at: time::OffsetDateTime::now_utc(),
+        };
+        manager
+            .start_with_profile("s1", context, profile, Some(path.clone()))
+            .unwrap();
+        manager.write_output("s1", "before\n");
+        manager.disconnect_session("s1");
+        manager.write_output("s2", "\x1b[32mearly\x1b[0m\n");
+        manager.rekey_session("s1", "s2");
+        manager.write_output("s2", "after\n");
+        manager.stop("s2").unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"before\n\x1b[32mearly\x1b[0m\nafter\n"
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
