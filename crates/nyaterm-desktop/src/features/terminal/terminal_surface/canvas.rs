@@ -378,14 +378,15 @@ impl NyaTermApp {
                 std::sync::Arc::from([])
             };
             // Buffer matches use absolute history indices; map into current viewport rows.
-            let active_match_abs = search_matches
+            let occurrences = self.terminal_buffer_occurrence_ranges();
+            let active_range = occurrences
                 .get(
                     self.terminal
                         .search
                         .active_index
-                        .min(search_matches.len().saturating_sub(1)),
+                        .min(occurrences.len().saturating_sub(1)),
                 )
-                .map(|search_match| search_match.line_index);
+                .cloned();
             let mut search_ranges_by_line: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
             let mut active_search_ranges_by_line: HashMap<usize, Vec<(usize, usize)>> =
                 HashMap::new();
@@ -416,13 +417,9 @@ impl NyaTermApp {
                     .entry(view_row)
                     .or_default()
                     .push(range);
-                if Some(abs) == active_match_abs
-                    && match_index
-                        == self
-                            .terminal
-                            .search
-                            .active_index
-                            .min(search_matches.len().saturating_sub(1))
+                if active_range
+                    .as_ref()
+                    .is_some_and(|range| range.contains(&match_index))
                 {
                     active_search_ranges_by_line
                         .entry(view_row)
