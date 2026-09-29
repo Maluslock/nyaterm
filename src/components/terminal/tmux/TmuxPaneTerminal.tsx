@@ -82,7 +82,19 @@ export function TmuxPaneTerminal({
   const paneIdRef = useRef<string | null>(pane.id ?? null);
   paneIdRef.current = pane.id ?? null;
   /** Pane whose screen has already been requested, so it is asked for once. */
-  const capturedPaneRef = useRef<string | null>(null);
+  /**
+   * Pane whose screen has already been asked for, per terminal instance.
+   *
+   * Keyed by the xterm object, not just the pane id: a rebuilt terminal starts
+   * blank, so it needs the replay again even for a pane that was captured before.
+   */
+  const capturedPaneRef = useRef<{
+    terminal: Terminal | null;
+    paneId: string | null;
+  }>({
+    terminal: null,
+    paneId: null,
+  });
   const [outputListenerReady, setOutputListenerReady] = useState(false);
 
   const { theme } = useTheme();
@@ -443,10 +455,14 @@ export function TmuxPaneTerminal({
   // leaves the pane blank. Ask tmux for the current screen once the output
   // listener is live, and again if the pane id only resolves later on.
   useEffect(() => {
-    if (!outputListenerReady) return;
+    if (!outputListenerReady || !terminalInstance) return;
     const paneId = pane.id;
-    if (!paneId || capturedPaneRef.current === paneId) return;
-    capturedPaneRef.current = paneId;
+    if (!paneId) return;
+    const captured = capturedPaneRef.current;
+    if (captured.terminal === terminalInstance && captured.paneId === paneId) {
+      return;
+    }
+    capturedPaneRef.current = { terminal: terminalInstance, paneId };
     void requestTmuxPaneCapture(sessionId, paneId).catch((error) => {
       logger.warn({
         domain: "session.lifecycle",
@@ -456,7 +472,7 @@ export function TmuxPaneTerminal({
         error,
       });
     });
-  }, [outputListenerReady, pane.id, sessionId]);
+  }, [outputListenerReady, terminalInstance, pane.id, sessionId]);
 
   // Keyword highlighting is shared with ordinary sessions, including the
   // built-in semantic rule categories.

@@ -1,5 +1,12 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { invoke } from "@/lib/invoke";
 import type { TmuxPane } from "@/lib/tmuxGateway";
 import { TMUX_PANE_FIND_EVENT } from "@/lib/tmuxGateway";
 import { TmuxPaneTerminal } from "./TmuxPaneTerminal";
@@ -214,6 +221,35 @@ describe("TmuxPaneTerminal find", () => {
       );
     });
     expect(screen.queryByPlaceholderText("terminalCtx.find")).toBeNull();
+  });
+
+  it("re-asks for the pane screen when the terminal is rebuilt", async () => {
+    const invokeMock = vi.mocked(invoke);
+    const { rerender } = renderPane();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("tmux_gateway_capture_pane", {
+        sessionId: "session-1",
+        paneId: "%0",
+      }),
+    );
+
+    // A rebuilt terminal starts blank, so the pane must be replayed again even
+    // though this pane was captured before.
+    invokeMock.mockClear();
+    rerender(
+      <TmuxPaneTerminal
+        sessionId="session-2"
+        pane={pane}
+        isActive
+        onSelect={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("tmux_gateway_capture_pane", {
+        sessionId: "session-2",
+        paneId: "%0",
+      }),
+    );
   });
 
   it("types into the search input without leaking to the pane", async () => {
