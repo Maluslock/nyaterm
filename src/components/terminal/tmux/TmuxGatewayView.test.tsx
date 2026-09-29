@@ -282,4 +282,41 @@ describe("TmuxGatewayView", () => {
       screen.getByText("parse error: unknown command: nonsense-command"),
     ).toBeTruthy();
   });
+  it("never types a named key into the shell when a prefixed key is not emulated", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+
+    // `\u0002ArrowLeft` used to reach the pane and the shell printed the key name.
+    expect(mockedInvoke).not.toHaveBeenCalledWith(
+      "tmux_gateway_input",
+      expect.objectContaining({ data: expect.stringContaining("ArrowLeft") }),
+    );
+  });
+
+  it("ignores IME composition keys instead of typing them into the shell", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    // WebKit reports composition keydowns with the legacy "Process" value, and a
+    // CJK IME sends the full-width colon with them.
+    fireEvent.keyDown(window, { key: "Process", isComposing: true } as KeyboardEventInit);
+
+    expect(mockedInvoke).not.toHaveBeenCalled();
+    expect(screen.queryByPlaceholderText("tmux.commandPlaceholder")).toBeNull();
+  });
+
+  it("opens the command line with the full-width colon an IME produces", () => {
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "：" });
+
+    expect(screen.getByPlaceholderText("tmux.commandPlaceholder")).toBeTruthy();
+  });
 });

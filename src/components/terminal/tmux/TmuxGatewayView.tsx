@@ -133,6 +133,8 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   } | null>(null);
   const pendingRequestId = useRef<string | null>(null);
   const commandInputRef = useRef<HTMLInputElement | null>(null);
+  const commandLineOpenRef = useRef(false);
+  commandLineOpenRef.current = commandLine !== null;
 
   useEffect(() => {
     if (commandLine === null) return;
@@ -193,6 +195,18 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     ]);
     let prefixArmed = false;
     const onKeyDown = (event: KeyboardEvent) => {
+      // The command line owns the keyboard while it is open, IME included.
+      if (commandLineOpenRef.current) return;
+      // IME composition and dead keys report legacy key values. Treating those
+      // as the prefixed key typed the literal placeholder into the shell
+      // (`Ctrl-b :` with an IME produced `ProcessProcess：：`).
+      if (
+        event.isComposing ||
+        event.key === "Process" ||
+        event.key === "Unidentified"
+      ) {
+        return;
+      }
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === "b") {
         // Pane keystrokes are forwarded with `send-keys`, so tmux's own prefix
         // never reaches the tmux client. Swallow it and treat the next key as a
@@ -219,17 +233,20 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
           '"': "split-window -v",
           "[": "copy-mode",
         };
-        // ":" is Shift+";" on most layouts, and toolkit-synthesised events can
-        // report the unshifted key, so accept both.
-        if (event.key === ":" || event.key === ";") {
+        // ":" is Shift+";" on most layouts, toolkit-synthesised events can
+        // report the unshifted key, and CJK input methods produce the full-width
+        // form, so accept all three.
+        if (event.key === ":" || event.key === ";" || event.key === "：") {
           setCommandLine((current) => current ?? "");
           return;
         }
         const command = prefixCommands[event.key];
         if (command) {
           send(command);
-        } else if (activePaneId) {
+        } else if (activePaneId && event.key.length === 1) {
           // Not emulated here: hand tmux's prefix through to the pane verbatim.
+          // Only a real character qualifies — forwarding a named key such as
+          // "ArrowLeft" typed its name into the shell.
           void sendTmuxPaneInput(sessionId, activePaneId, `\u0002${event.key}`).catch(
             () => {},
           );
