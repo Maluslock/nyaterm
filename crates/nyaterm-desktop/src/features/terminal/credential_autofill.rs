@@ -988,8 +988,8 @@ impl NyaTermApp {
 }
 
 /// Whether the connection has a password that can be resolved at fill time.
-/// Mirrors the resolution order in `resolve_connection_password_from_store` and
-/// the account rule in `ConnectionAuth::uses_account_password`, so a candidate
+/// Mirrors the source rule in `resolve_connection_password_from_store` and
+/// `ConnectionAuth::uses_account_password`, so a candidate
 /// is only offered when a store request can actually return a secret: an
 /// account reference counts only when the account supplies the password
 /// (`password_source == Account`, or the legacy shape with no inline
@@ -1040,16 +1040,25 @@ fn resolve_connection_password_from_store(
     let Some(auth) = connection.auth.as_ref() else {
         return Ok(ConnectionPasswordResolve::MissingPassword);
     };
-    if let Some(password) = connection_auth_inline_password(auth) {
-        return Ok(ConnectionPasswordResolve::Resolved(password));
+    if auth.mode != "password" {
+        return Ok(ConnectionPasswordResolve::MissingPassword);
     }
-    let account = store.load_account_for_auth(auth)?;
-    if let Some(password) =
-        account.and_then(|account| account.password.filter(|value| !value.trim().is_empty()))
-    {
-        return Ok(ConnectionPasswordResolve::Resolved(password));
+    if auth.uses_account_password() {
+        let account = store.load_account_for_auth(auth)?;
+        return Ok(
+            match account
+                .and_then(|account| account.password)
+                .filter(|value| !value.trim().is_empty())
+            {
+                Some(password) => ConnectionPasswordResolve::Resolved(password),
+                None => ConnectionPasswordResolve::MissingPassword,
+            },
+        );
     }
-    Ok(ConnectionPasswordResolve::MissingPassword)
+    Ok(match connection_auth_inline_password(auth) {
+        Some(password) => ConnectionPasswordResolve::Resolved(password),
+        None => ConnectionPasswordResolve::MissingPassword,
+    })
 }
 
 fn credential_autofill_snapshot_detection_can_run(
@@ -1457,11 +1466,11 @@ mod tests {
             has_password: false,
             ..Default::default()
         };
-        assert_eq!(
+        assert!(
             connection_auth_inline_password(&inline)
                 .expect("inline password")
-                .expose_secret(),
-            "secret"
+                .expose_secret()
+                == "secret"
         );
         let locked = ConnectionAuth {
             mode: "password".into(),
@@ -1561,7 +1570,7 @@ mod tests {
     /// carriage return.
     #[test]
     fn connection_password_resolves_from_store_to_the_terminal_payload() {
-        use nyaterm_core::{ConnectionAuth, SecretString};
+        use nyaterm_core::{ConnectionAuth, ConnectionPasswordSource, SecretString};
         use nyaterm_store::ConnectionStore;
 
         let root = crate::test_support::TestConfigDir::new("nyaterm-connection-password-fill");
@@ -1570,6 +1579,7 @@ mod tests {
             "root",
             Some(ConnectionAuth {
                 mode: "password".into(),
+                password_source: Some(ConnectionPasswordSource::Connection),
                 // Hydrated shape: plaintext inline, catalog flag cleared.
                 password: Some(SecretString::from("s3cret")),
                 has_password: false,
@@ -1587,7 +1597,7 @@ mod tests {
             panic!("hydrated inline password should resolve");
         };
         password.expose_secret_mut().push('\r');
-        assert_eq!(password.into_secret().into_bytes(), b"s3cret\r");
+        assert!(password.into_secret().into_bytes() == b"s3cret\r");
 
         let missing = resolve_connection_password_from_store(&store, "nope")
             .expect("resolve should not error");
@@ -1595,6 +1605,269 @@ mod tests {
             missing,
             ConnectionPasswordResolve::MissingConnection
         ));
+    }
+
+    fn assert_resolved_password(store: &nyaterm_store::ConnectionStore, expected: &str) {
+        let outcome = resolve_connection_password_from_store(store, "conn-1")
+            .expect("resolve should not error");
+        assert!(
+            matches!(outcome, ConnectionPasswordResolve::Resolved(password) if password.expose_secret() == expected)
+        );
+    }
+
+    fn save_test_account(store: &nyaterm_store::ConnectionStore, password: Option<&str>) {
+        use nyaterm_core::models::credentials::SavedPassword;
+
+        store
+            .save_password(SavedPassword {
+                id: "account-1".into(),
+                name: "Login account".into(),
+                username: "root".into(),
+                password: password.map(Into::into),
+                has_password: false,
+            })
+            .expect("save account");
+    }
+
+    #[test]
+    fn account_source_uses_account_password_despite_stale_connection_record() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+
+        let root = TestConfigDir::new("nyaterm-account-source-stale-connection");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        save_test_account(&store, Some("account-secret"));
+        let mut auth = account_password_auth();
+        auth.password = Some(SecretString::from("stale-connection-secret"));
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection with stale password");
+
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        let hydrated_auth = loaded.auth.as_ref().unwrap();
+        assert!(hydrated_auth.uses_account_password());
+        assert!(connection_has_resolvable_password(hydrated_auth));
+        assert_resolved_password(&store, "account-secret");
+    }
+
+    #[test]
+    fn connection_source_never_uses_saved_account_password() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+
+        let root = TestConfigDir::new("nyaterm-connection-source-with-account");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        save_test_account(&store, Some("account-secret"));
+        let auth = ConnectionAuth {
+            mode: "password".into(),
+            account_id: Some("account-1".into()),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            password: Some(SecretString::from("connection-secret")),
+            ..Default::default()
+        };
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert_resolved_password(&store, "connection-secret");
+
+        let without_connection_password = ConnectionAuth {
+            password: None,
+            ..loaded.auth.unwrap()
+        };
+        store
+            .save_connection(&ssh_connection("root", Some(without_connection_password)))
+            .expect("remove connection password");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(!connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert!(matches!(
+            resolve_connection_password_from_store(&store, "conn-1").unwrap(),
+            ConnectionPasswordResolve::MissingPassword
+        ));
+    }
+
+    #[test]
+    fn non_password_auth_never_resolves_connection_password() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+
+        let root = TestConfigDir::new("nyaterm-non-password-auth");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        let auth = ConnectionAuth {
+            mode: "publickey".into(),
+            password_source: Some(ConnectionPasswordSource::Connection),
+            password: Some(SecretString::from("unused-secret")),
+            ..Default::default()
+        };
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(!connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert!(matches!(
+            resolve_connection_password_from_store(&store, "conn-1").unwrap(),
+            ConnectionPasswordResolve::MissingPassword
+        ));
+    }
+
+    #[test]
+    fn legacy_password_source_follows_hydrated_auth_rule() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+
+        let root = TestConfigDir::new("nyaterm-legacy-password-source");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        save_test_account(&store, Some("account-secret"));
+        let mut auth = ConnectionAuth {
+            mode: "password".into(),
+            password_id: Some("account-1".into()),
+            ..Default::default()
+        };
+        store
+            .save_connection(&ssh_connection("root", Some(auth.clone())))
+            .expect("save legacy account reference");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(loaded.auth.as_ref().unwrap().uses_account_password());
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert_resolved_password(&store, "account-secret");
+
+        auth.password = Some(SecretString::from("connection-secret"));
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save legacy inline password");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(!loaded.auth.as_ref().unwrap().uses_account_password());
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert_resolved_password(&store, "connection-secret");
+    }
+
+    #[test]
+    fn account_source_does_not_fall_back_to_stale_connection_password() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+
+        let root = TestConfigDir::new("nyaterm-account-source-unavailable");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        let mut auth = account_password_auth();
+        auth.password = Some(SecretString::from("stale-connection-secret"));
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection with stale password");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+
+        assert!(matches!(
+            resolve_connection_password_from_store(&store, "conn-1").unwrap(),
+            ConnectionPasswordResolve::MissingPassword
+        ));
+        save_test_account(&store, None);
+        assert!(matches!(
+            resolve_connection_password_from_store(&store, "conn-1").unwrap(),
+            ConnectionPasswordResolve::MissingPassword
+        ));
+    }
+
+    #[test]
+    fn account_source_decryption_error_does_not_use_stale_connection_password() {
+        use nyaterm_core::SecretString;
+        use nyaterm_core::models::credentials::SavedPassword;
+        use nyaterm_store::ConnectionStore;
+        use redb::{Database, TableDefinition};
+
+        let root = TestConfigDir::new("nyaterm-account-source-corrupt");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        save_test_account(&store, Some("account-secret"));
+        let mut auth = account_password_auth();
+        auth.password = Some(SecretString::from("stale-connection-secret"));
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection with stale password");
+        let db_path = store.db_path().to_path_buf();
+        drop(store);
+
+        let db = Database::open(db_path).expect("open test database");
+        let txn = db.begin_write().expect("write test database");
+        let mut table = txn
+            .open_table(TableDefinition::<&str, &[u8]>::new("credentials"))
+            .expect("credentials table");
+        let corrupt = SavedPassword {
+            id: "account-1".into(),
+            name: "Login account".into(),
+            username: "root".into(),
+            password: Some(SecretString::from("invalid-ciphertext")),
+            has_password: true,
+        };
+        let raw = serde_json::to_vec(&corrupt).expect("serialize corrupt account");
+        table
+            .insert("credentials/password/account-1", raw.as_slice())
+            .expect("replace account ciphertext");
+        drop(table);
+        txn.commit().expect("commit corrupt account");
+        drop(db);
+
+        let store = ConnectionStore::open(root.path().join("config")).expect("reopen test store");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert!(resolve_connection_password_from_store(&store, "conn-1").is_err());
+    }
+
+    #[test]
+    fn account_source_locked_vault_does_not_use_stale_connection_password() {
+        use nyaterm_core::SecretString;
+        use nyaterm_store::ConnectionStore;
+        use redb::{Database, TableDefinition};
+
+        let root = TestConfigDir::new("nyaterm-account-source-locked");
+        let store = ConnectionStore::open(root.path().join("config")).expect("test store");
+        save_test_account(&store, Some("account-secret"));
+        let mut auth = account_password_auth();
+        auth.password = Some(SecretString::from("stale-connection-secret"));
+        store
+            .save_connection(&ssh_connection("root", Some(auth)))
+            .expect("save connection with stale password");
+        let db_path = store.db_path().to_path_buf();
+        drop(store);
+
+        let db = Database::open(db_path).expect("open test database");
+        let txn = db.begin_write().expect("write test database");
+        let mut table = txn
+            .open_table(TableDefinition::<&str, &str>::new("meta"))
+            .expect("meta table");
+        table
+            .remove("security/master_key")
+            .expect("remove master key");
+        drop(table);
+        let mut legacy_table = txn
+            .open_table(TableDefinition::<&str, &str>::new("text_docs"))
+            .expect("legacy text table");
+        legacy_table
+            .remove("master.key")
+            .expect("remove legacy master key");
+        drop(legacy_table);
+        txn.commit().expect("commit locked vault");
+        drop(db);
+
+        let store = ConnectionStore::open(root.path().join("config")).expect("reopen test store");
+        let loaded = store.get_connection("conn-1").unwrap().unwrap();
+        assert!(connection_has_resolvable_password(
+            loaded.auth.as_ref().unwrap()
+        ));
+        assert!(resolve_connection_password_from_store(&store, "conn-1").is_err());
     }
 
     const SESSION_ID: &str = "credential-autofill-session";
