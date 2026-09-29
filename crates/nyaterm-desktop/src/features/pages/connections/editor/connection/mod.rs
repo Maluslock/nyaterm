@@ -1138,7 +1138,11 @@ impl NyaTermApp {
             fields: &fields,
             baud_popover_open,
         };
-        let mut icon_grid = div().grid().grid_cols(7).gap_1();
+        let mut icon_grid = div()
+            .grid()
+            .grid_cols(7)
+            .gap_1()
+            .debug_selector(|| "connection-editor-icon-grid".to_string());
         for icon_key in CONNECTION_ICON_OPTIONS.iter().copied() {
             let icon = resolve_connection_icon(Some(icon_key), editor.kind.label());
             let selected = editor.icon.as_deref().unwrap_or(DEFAULT_CONNECTION_ICON) == icon_key;
@@ -1227,6 +1231,7 @@ impl NyaTermApp {
                 themed_icon(palette, icon_def, false, 17.).into_any_element()
             });
         let icon_picker_content = div()
+            .debug_selector(|| "connection-editor-icon-popover-content".to_string())
             .occlude()
             .flex()
             .flex_col()
@@ -1237,12 +1242,7 @@ impl NyaTermApp {
             .border_color(rgb(palette.border))
             .bg(rgb(palette.surface))
             .shadow_lg()
-            .child(
-                div()
-                    .max_h(px(220.))
-                    .overflow_y_scrollbar()
-                    .child(icon_grid),
-            )
+            .child(div().h(px(220.)).overflow_y_scrollbar().child(icon_grid))
             .child(
                 nyaterm_ui::NyaButton::new("import-custom-icon", t!("dialog.importCustomIcon"))
                     .on_click(cx.listener(|app, _, window, cx| {
@@ -1261,6 +1261,7 @@ impl NyaTermApp {
                 this.child(
                     div()
                         .id("connection-editor-icon-auto-detect")
+                        .debug_selector(|| "connection-editor-icon-auto-detect".to_string())
                         .mt_2()
                         .pt_2()
                         .border_t_1()
@@ -2791,13 +2792,14 @@ fn connection_proxy_jump_would_cycle(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{collections::HashMap, path::Path, sync::Arc};
 
     use gpui::{
         AppContext as _, Entity, InteractiveElement as _, IntoElement, Modifiers,
-        ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, div, px,
+        ParentElement as _, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Styled as _,
+        TestAppContext, VisualTestContext, div, point, px,
     };
-    use nyaterm_core::{AppRuntime, Group, RuntimeMode};
+    use nyaterm_core::{AppRuntime, Group, RuntimeMode, models::sessions::ConnectionCustomIcon};
 
     use super::{connection_editor_group_menu_options, ordered_connection_groups};
     use crate::entities::{OverlayStore, StartupRestoreStore, UiStoreHandles};
@@ -3117,6 +3119,73 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(selected, vec![Some("child".to_string())]);
+    }
+
+    #[gpui::test]
+    fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
+        cx: &mut TestAppContext,
+    ) {
+        let test_dir = TestConfigDir::new("nyaterm-connection-icon-picker-scroll");
+        let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
+        vcx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let icon = Arc::new(RenderImage::new(vec![image::Frame::new(
+                    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255])),
+                )]));
+                let records = (0..14)
+                    .map(|index| ConnectionCustomIcon {
+                        id: format!("test-icon-{index}"),
+                        name: format!("Test icon {index}"),
+                        data_url: String::new(),
+                        created_at_ms: 0,
+                        updated_at_ms: 0,
+                    })
+                    .collect::<Vec<_>>();
+                let images = records
+                    .iter()
+                    .map(|record| (record.id.clone(), icon.clone()))
+                    .collect::<HashMap<_, _>>();
+                app.connection_state.custom_icons.records = records;
+                app.connection_state.custom_icons.images = Arc::new(images);
+                app.set_connection_icon_picker_open(true, cx);
+            });
+        });
+        for _ in 0..3 {
+            draw_editor(&app, vcx);
+        }
+
+        let grid_before = vcx
+            .debug_bounds("connection-editor-icon-grid")
+            .expect("icon grid should render inside the picker");
+        let popup_before = vcx
+            .debug_bounds("connection-editor-icon-popover-content")
+            .expect("icon picker should be open");
+        let auto_detect_before = vcx
+            .debug_bounds("connection-editor-icon-auto-detect")
+            .expect("auto-detect action should render below the icon grid");
+        assert!(grid_before.size.height > px(220.));
+        vcx.simulate_event(ScrollWheelEvent {
+            position: point(grid_before.left() + px(20.), grid_before.top() + px(20.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-48.))),
+            ..Default::default()
+        });
+        draw_editor(&app, vcx);
+
+        let grid_after = vcx
+            .debug_bounds("connection-editor-icon-grid")
+            .expect("icon grid should remain scrollable");
+        let popup_after = vcx
+            .debug_bounds("connection-editor-icon-popover-content")
+            .expect("icon picker should remain open");
+        let auto_detect_after = vcx
+            .debug_bounds("connection-editor-icon-auto-detect")
+            .expect("auto-detect action should remain below the icon grid");
+        assert!(
+            grid_after.top() < grid_before.top(),
+            "grid: {grid_before:?} -> {grid_after:?}, popup: {popup_before:?} -> {popup_after:?}, auto-detect: {auto_detect_before:?} -> {auto_detect_after:?}"
+        );
+        assert_eq!(popup_after.top(), popup_before.top());
+        assert_eq!(auto_detect_after.top(), auto_detect_before.top());
     }
 
     #[gpui::test]
