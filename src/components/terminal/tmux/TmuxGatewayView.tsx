@@ -105,6 +105,42 @@ function LayoutNodeView({
   }
 
   const isColumns = node.direction === "columns";
+
+  const startDividerDrag = (
+    event: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>,
+    childIndex: number,
+  ) => {
+    if (dividerDragActive) return;
+    const paneId = edgePaneId(
+      node.children[childIndex - 1],
+      isColumns ? "right" : "bottom",
+    );
+    if (!paneId) return;
+    event.preventDefault();
+    dividerDragActive = true;
+    const axis: SplitAxis = isColumns ? "columns" : "rows";
+    const start = isColumns ? event.clientX : event.clientY;
+    let sentCells = 0;
+    const onMove = (moveEvent: PointerEvent | MouseEvent) => {
+      const current = isColumns ? moveEvent.clientX : moveEvent.clientY;
+      sentCells = onResizePane(paneId, axis, current - start, sentCells);
+    };
+    const onUp = () => {
+      dividerDragActive = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("mouseup", onUp);
+    };
+    // Both families are bound: engines without Pointer Events (older WebKitGTK)
+    // only send the mouse ones, and a duplicate move at the same coordinate
+    // computes a zero step, so it costs nothing.
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <div
       className={`flex h-full w-full min-h-0 min-w-0 ${
@@ -145,25 +181,8 @@ function LayoutNodeView({
                   onStepPane(paneId, axis, 1);
                 }
               }}
-              onPointerDown={(event) => {
-                const before = node.children[index - 1];
-                const paneId = edgePaneId(before, isColumns ? "right" : "bottom");
-                if (!paneId) return;
-                event.preventDefault();
-                const axis: SplitAxis = isColumns ? "columns" : "rows";
-                const start = isColumns ? event.clientX : event.clientY;
-                let sentCells = 0;
-                const onMove = (moveEvent: PointerEvent) => {
-                  const current = isColumns ? moveEvent.clientX : moveEvent.clientY;
-                  sentCells = onResizePane(paneId, axis, current - start, sentCells);
-                };
-                const onUp = () => {
-                  window.removeEventListener("pointermove", onMove);
-                  window.removeEventListener("pointerup", onUp);
-                };
-                window.addEventListener("pointermove", onMove);
-                window.addEventListener("pointerup", onUp);
-              }}
+              onPointerDown={(event) => startDividerDrag(event, index)}
+              onMouseDown={(event) => startDividerDrag(event, index)}
             />
           ) : null}
           <div
@@ -211,6 +230,15 @@ const COMMAND_PRESETS = [
   "break-pane",
   "list-windows -F '#{window_index}: #{window_name}'",
 ];
+
+/**
+ * Whether a divider drag is already running.
+ *
+ * Chromium delivers `pointerdown` and `mousedown` for the same press, and older
+ * WebKitGTK builds deliver only the mouse events — so both are bound and the
+ * first one wins.
+ */
+let dividerDragActive = false;
 
 /** Recently submitted command lines, newest last (module scope: survives remounts). */
 const commandHistory: string[] = [];
