@@ -2949,6 +2949,7 @@
   "tmux": {
     "commandLine": "tmux 命令行",
     "commandPlaceholder": "输入 tmux 命令，回车执行",
+    "commandPresets": "常用 tmux 命令",
     "detach": "从 tmux 分离（回到终端）",
     "killWindow": "关闭 tmux 窗口",
     "layout": "布局",
@@ -2961,6 +2962,8 @@
     "previousWindow": "上一个 tmux 窗口",
     "renameWindow": "重命名窗口",
     "resizePane": "拖动调整该 pane 大小",
+    "splitHorizontal": "左右分屏",
+    "splitVertical": "上下分屏",
     "waitingForLayout": "正在等待 tmux 布局…",
     "windowActivity": "有新输出",
     "windowBell": "响铃",

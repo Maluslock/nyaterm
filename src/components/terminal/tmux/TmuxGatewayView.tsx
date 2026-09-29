@@ -13,9 +13,11 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleDot,
+  Columns2,
   LogOut,
   Maximize2,
   Plus,
+  Rows2,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -184,6 +186,37 @@ function LayoutNodeView({
   );
 }
 
+/**
+ * Commands worth one click.
+ *
+ * The strip hides the two thirds of tmux that has no button (pane resizing,
+ * layout repair, break/join, synchronize-panes, capture-pane), and a cheatsheet
+ * is not something a user should have to memorise — so the command line offers
+ * the recipes, labelled with the command itself.
+ */
+const COMMAND_PRESETS = [
+  "capture-pane -p -S -200",
+  "split-window -h",
+  "split-window -v",
+  "resize-pane -Z",
+  "select-layout tiled",
+  "synchronize-panes on",
+  "synchronize-panes off",
+  "rename-window ",
+  "break-pane",
+  "list-windows -F '#{window_index}: #{window_name}'",
+];
+
+/** Recently submitted command lines, newest last (module scope: survives remounts). */
+const commandHistory: string[] = [];
+const COMMAND_HISTORY_LIMIT = 50;
+
+function rememberCommand(command: string) {
+  if (commandHistory[commandHistory.length - 1] === command) return;
+  commandHistory.push(command);
+  if (commandHistory.length > COMMAND_HISTORY_LIMIT) commandHistory.shift();
+}
+
 export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -257,6 +290,9 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const commandLineOpenRef = useRef(false);
   commandLineOpenRef.current = commandLine !== null;
+  // Command history survives view remounts, like a shell's.
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+
   // Inline window rename, opened by double-clicking a window tab.
   const [renamingWindow, setRenamingWindow] = useState<{ id: string; name: string } | null>(
     null,
@@ -300,6 +336,8 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       setCommandLine(null);
       return;
     }
+    rememberCommand(command);
+    setHistoryIndex(null);
     const requestId = crypto.randomUUID();
     pendingRequestId.current = requestId;
     setCommandResult(null);
@@ -576,6 +614,24 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       >
         <Maximize2 className="h-3 w-3" />
       </button>
+      <button
+        type="button"
+        aria-label={t("tmux.splitHorizontal")}
+        title={t("tmux.splitHorizontal")}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
+        onClick={() => send("split-window -h")}
+      >
+        <Columns2 className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        aria-label={t("tmux.splitVertical")}
+        title={t("tmux.splitVertical")}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
+        onClick={() => send("split-window -v")}
+      >
+        <Rows2 className="h-3 w-3" />
+      </button>
       <select
         aria-label={t("tmux.layout")}
         title={t("tmux.layout")}
@@ -636,6 +692,26 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       </div>
       {commandLine !== null ? (
         <div className="flex flex-col gap-1 border-t border-[var(--df-border)] px-2 py-1">
+          <div
+            className="flex items-center gap-1 overflow-x-auto"
+            aria-label={t("tmux.commandPresets")}
+            role="toolbar"
+          >
+            {COMMAND_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className="shrink-0 rounded bg-[var(--df-bg-hover)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--df-text-muted)] hover:text-[var(--df-text)]"
+                title={preset}
+                onClick={() => {
+                  setCommandLine(preset);
+                  commandInputRef.current?.focus();
+                }}
+              >
+                {preset.trim()}
+              </button>
+            ))}
+          </div>
           <input
             ref={commandInputRef}
             className="h-6 w-full min-w-0 rounded bg-[var(--df-bg-hover)] px-2 font-mono text-xs text-[var(--df-text)] outline-none"
@@ -651,6 +727,25 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 setCommandLine(null);
+                setHistoryIndex(null);
+              } else if (event.key === "ArrowUp" && commandHistory.length > 0) {
+                event.preventDefault();
+                const next =
+                  historyIndex === null
+                    ? commandHistory.length - 1
+                    : Math.max(0, historyIndex - 1);
+                setHistoryIndex(next);
+                setCommandLine(commandHistory[next] ?? "");
+              } else if (event.key === "ArrowDown" && historyIndex !== null) {
+                event.preventDefault();
+                const next = historyIndex + 1;
+                if (next >= commandHistory.length) {
+                  setHistoryIndex(null);
+                  setCommandLine("");
+                } else {
+                  setHistoryIndex(next);
+                  setCommandLine(commandHistory[next] ?? "");
+                }
               }
               event.stopPropagation();
             }}

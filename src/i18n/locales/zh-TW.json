@@ -2944,6 +2944,7 @@
   "tmux": {
     "commandLine": "tmux 命令列",
     "commandPlaceholder": "輸入 tmux 命令，Enter 執行",
+    "commandPresets": "常用 tmux 命令",
     "detach": "從 tmux 分離（回到終端）",
     "killWindow": "關閉 tmux 視窗",
     "layout": "佈局",
@@ -2956,6 +2957,8 @@
     "previousWindow": "上一個 tmux 視窗",
     "renameWindow": "重新命名視窗",
     "resizePane": "拖曳調整此 pane 大小",
+    "splitHorizontal": "左右分屏",
+    "splitVertical": "上下分屏",
     "waitingForLayout": "正在等待 tmux 佈局…",
     "windowActivity": "有新輸出",
     "windowBell": "鈴聲",

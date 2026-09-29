@@ -436,4 +436,56 @@ describe("TmuxGatewayView", () => {
       command: "resize-pane -t %0 -R 1",
     });
   });
+  it("fills the command line from a preset", () => {
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: ":" });
+    fireEvent.click(screen.getByRole("button", { name: "capture-pane -p -S -200" }));
+
+    const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
+    expect((input as HTMLInputElement).value).toBe("capture-pane -p -S -200");
+  });
+
+  it("walks the command history with the arrow keys", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: ":" });
+    const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
+    fireEvent.change(input, { target: { value: "list-sessions" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "list-windows" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect((input as HTMLInputElement).value).toBe("list-windows");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect((input as HTMLInputElement).value).toBe("list-sessions");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect((input as HTMLInputElement).value).toBe("list-windows");
+  });
+
+  it("splits panes from the strip", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getByLabelText } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.click(getByLabelText("tmux.splitHorizontal"));
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "split-window -h",
+    });
+
+    mockedInvoke.mockClear();
+    fireEvent.click(getByLabelText("tmux.splitVertical"));
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "split-window -v",
+    });
+  });
 });

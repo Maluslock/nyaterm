@@ -2951,6 +2951,7 @@
   "tmux": {
     "commandLine": "tmux command line",
     "commandPlaceholder": "tmux command, Enter to run",
+    "commandPresets": "Common tmux commands",
     "detach": "Detach from tmux (back to the shell)",
     "killWindow": "Kill tmux window",
     "layout": "Layout",
@@ -2963,6 +2964,8 @@
     "previousWindow": "Previous tmux window",
     "renameWindow": "Rename window",
     "resizePane": "Drag to resize this pane",
+    "splitHorizontal": "Split left/right",
+    "splitVertical": "Split top/bottom",
     "waitingForLayout": "Waiting for tmux layout…",
     "windowActivity": "New output",
     "windowBell": "Bell",
