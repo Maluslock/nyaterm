@@ -1129,11 +1129,6 @@ impl NyaTermApp {
             self.connection_state.editor_agent_identity_picker_is_open();
         let credential_overlay = self.connection_state.editor_credential_overlay();
         let baud_popover_open = self.connection_state.editor_baud_popover_is_open();
-        let icon_picker_bg = if native_window {
-            rgb(palette.surface)
-        } else {
-            self.shell_surface_color(palette.surface)
-        };
         let validation_error = self.connection_editor_validation_error(&editor);
         let save_enabled = validation_error.is_none();
         let editor_focus = self.connection_state.editor_focus_handle();
@@ -1233,16 +1228,18 @@ impl NyaTermApp {
             });
         let icon_picker_content = div()
             .occlude()
+            .flex()
+            .flex_col()
             .w(px(232.))
             .p_2()
             .rounded_md()
             .border_1()
             .border_color(rgb(palette.border))
-            .bg(icon_picker_bg)
+            .bg(rgb(palette.surface))
             .shadow_lg()
             .child(
                 div()
-                    .max_h(px(280.))
+                    .max_h(px(220.))
                     .overflow_y_scrollbar()
                     .child(icon_grid),
             )
