@@ -1,6 +1,6 @@
 use gpui::Context;
 use nyaterm_core::{SavedConnection, uuid};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 
@@ -55,7 +55,7 @@ impl NyaTermApp {
         let count = connections.len();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 for connection in &connections {
                     let copy = duplicate_saved_connection(connection);
                     store.save_connection(&copy)?;

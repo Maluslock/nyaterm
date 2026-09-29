@@ -5,7 +5,7 @@ use gpui::{Context, KeyDownEvent, Window};
 use crate::features::{NyaTermApp, text_inputs::TextInputSetup};
 use crate::models::{AiActionEditorField, AiActionListKind};
 use nyaterm_core::AiSettings;
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 impl NyaTermApp {
     pub(in crate::features) fn pending_ai_settings(&self) -> AiSettings {
@@ -34,7 +34,7 @@ impl NyaTermApp {
         snapshot: AiSettings,
         cx: &mut Context<Self>,
     ) {
-        let request = store_request(StoreDomain::Ai, move |store| {
+        let request = nyaterm_store::store_mutation(StoreDomain::Ai, move |store| {
             store.save_ai_settings(snapshot)
         });
         let task = match self.store_ui.try_submit(generation, request) {

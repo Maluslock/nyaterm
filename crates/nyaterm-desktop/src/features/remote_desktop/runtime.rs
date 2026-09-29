@@ -2112,7 +2112,7 @@ impl NyaTermApp {
         };
         let submitted = self.submit_store_request(
             0,
-            store_request(StoreDomain::Security, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Security, move |store| {
                 store.replace_rdp_known_host_if_matches(
                     &host,
                     port,

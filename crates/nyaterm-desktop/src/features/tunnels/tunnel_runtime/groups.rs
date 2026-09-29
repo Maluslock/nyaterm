@@ -1,7 +1,7 @@
 use rust_i18n::t;
 
 use gpui::{Context, Window};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 use crate::models::{NetworkGroupEditorState, NetworkTab};
@@ -134,7 +134,7 @@ impl NyaTermApp {
         let persisted = groups.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Tunnels, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_tunnel_groups(&persisted)
             }),
             move |this, event, cx| {
@@ -179,7 +179,7 @@ impl NyaTermApp {
         let persisted = groups.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Tunnels, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_proxy_groups(&persisted)
             }),
             move |this, event, cx| {
@@ -255,7 +255,7 @@ impl NyaTermApp {
         let tunnels = removal.tunnels().to_vec();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Tunnels, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_tunnel_groups(&groups)?;
                 store.replace_tunnels(&tunnels)
             }),
@@ -298,7 +298,7 @@ impl NyaTermApp {
         let proxies = removal.proxies().to_vec();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Tunnels, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Tunnels, move |store| {
                 store.replace_proxy_groups(&groups)?;
                 store.replace_proxies(&proxies)
             }),

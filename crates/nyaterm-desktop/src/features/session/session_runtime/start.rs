@@ -977,7 +977,7 @@ impl NyaTermApp {
         let request_id = connection_id.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 store.mark_connection_used(&request_id)?;
                 store.get_connection(&request_id)
             }),

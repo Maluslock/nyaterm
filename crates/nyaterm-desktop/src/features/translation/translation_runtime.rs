@@ -3,7 +3,7 @@ use rust_i18n::t;
 use futures::StreamExt as _;
 use gpui::{ClipboardItem, Context, IntoElement, SharedString, Window, div, prelude::*, px, rgb};
 use nyaterm_core::TranslationSettings;
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 use nyaterm_ui::NyaDialogWindowExt as _;
 use nyaterm_ui::NyaScrollable;
 
@@ -53,7 +53,7 @@ impl NyaTermApp {
         snapshot: TranslationSettings,
         cx: &mut Context<Self>,
     ) {
-        let request = store_request(StoreDomain::Settings, move |store| {
+        let request = nyaterm_store::store_mutation(StoreDomain::Settings, move |store| {
             store.save_translation_settings(snapshot)
         });
         let task = match self.store_ui.try_submit(generation, request) {

@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use gpui::{Context, FocusHandle, KeyDownEvent, Window};
 use nyaterm_core::{SavedConnection, SessionsConfig};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 
@@ -50,7 +50,7 @@ impl NyaTermApp {
     pub(in crate::features) fn confirm_connections_clear_all(&mut self, cx: &mut Context<Self>) {
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, |store| {
                 store.replace_sessions(&SessionsConfig::default())?;
                 store.load_sessions()
             }),
@@ -146,7 +146,7 @@ impl NyaTermApp {
         let persisted_id = connection_id.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 store.delete_connection(&persisted_id)?;
                 store.load_sessions()
             }),
@@ -233,7 +233,7 @@ impl NyaTermApp {
         let persisted_id = group_id.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 store.delete_group(&persisted_id)?;
                 store.load_sessions()
             }),
@@ -461,7 +461,7 @@ impl NyaTermApp {
         let persisted = selected.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 for connection in &persisted {
                     store.delete_connection(&connection.id)?;
                 }

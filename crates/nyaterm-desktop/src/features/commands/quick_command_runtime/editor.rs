@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use gpui::{Context, KeyDownEvent};
 use nyaterm_core::{QuickCommand, QuickCommandCategory, uuid};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::{NyaTermApp, formatting::non_empty_string};
 use crate::models::QuickCommandEditorField;
@@ -180,7 +180,7 @@ impl NyaTermApp {
         let label = command.label.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Commands, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Commands, move |store| {
                 store.upsert_quick_command(command, new_category)
             }),
             move |this, event, cx| {

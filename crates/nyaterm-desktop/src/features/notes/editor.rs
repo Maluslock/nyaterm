@@ -430,7 +430,7 @@ impl NoteEditorWindow {
         self.app.update(cx, |app, cx| {
             app.submit_store_request(
                 0,
-                store_request(StoreDomain::Notes, move |store| {
+                nyaterm_store::store_mutation(StoreDomain::Notes, move |store| {
                     store.create_note(parent_id, Some(title), Some(markdown))
                 }),
                 move |app, event, cx| match event.outcome {

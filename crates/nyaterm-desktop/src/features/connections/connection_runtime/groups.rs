@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use gpui::{Context, KeyDownEvent, Window};
 use nyaterm_core::{Group, uuid};
-use nyaterm_store::{StoreDomain, store_request};
+use nyaterm_store::StoreDomain;
 
 use crate::features::NyaTermApp;
 use crate::models::ConnectionGroupEditorMode;
@@ -156,7 +156,7 @@ impl NyaTermApp {
         let persisted = group.clone();
         self.submit_store_request(
             0,
-            store_request(StoreDomain::Connections, move |store| {
+            nyaterm_store::store_mutation(StoreDomain::Connections, move |store| {
                 store.save_group(&persisted)?;
                 store.load_sessions()
             }),
