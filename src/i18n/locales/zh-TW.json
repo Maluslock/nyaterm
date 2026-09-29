@@ -2942,6 +2942,8 @@
     "translate": "翻譯"
   },
   "tmux": {
+    "commandLine": "tmux 命令列",
+    "commandPlaceholder": "輸入 tmux 命令，Enter 執行",
     "detach": "從 tmux 分離（回到終端）",
     "killWindow": "關閉 tmux 視窗",
     "newWindow": "新增 tmux 視窗",

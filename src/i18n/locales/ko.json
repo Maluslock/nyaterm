@@ -2941,6 +2941,8 @@
     "translate": "번역"
   },
   "tmux": {
+    "commandLine": "tmux 명령줄",
+    "commandPlaceholder": "tmux 명령 입력 후 Enter",
     "detach": "tmux에서 분리(셸로 돌아가기)",
     "killWindow": "tmux 창 닫기",
     "newWindow": "새 tmux 창",

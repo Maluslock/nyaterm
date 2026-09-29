@@ -47,6 +47,10 @@ pub struct TmuxPaneOutput {
 /// response self-identifying no matter how blocks are batched.
 const WINDOW_TAG: &str = "NYATERM-WINDOW:";
 const PANE_TAG: &str = "NYATERM-PANE:";
+/// Brackets the response of a tmux command run from the UI, so its output and
+/// any `%error` can be shown instead of silently dropped.
+const REPLY_BEGIN_TAG: &str = "NYATERM-REPLY:";
+const REPLY_END_TAG: &str = "NYATERM-REPLY-END:";
 /// Brackets the `capture-pane` replay of one pane's current screen.
 const CAPTURE_BEGIN_TAG: &str = "NYATERM-CAPTURE-BEGIN:";
 const CAPTURE_END_TAG: &str = "NYATERM-CAPTURE-END:";
@@ -118,6 +122,17 @@ struct Inner {
     probe_logged: bool,
     /// Pane whose screen is being captured, with the lines collected so far.
     capture: Option<(String, Vec<String>)>,
+    /// UI command whose response is being collected.
+    reply: Option<ReplyCapture>,
+    /// Finished command responses, drained by `filter`.
+    replies: Vec<TmuxCommandResponse>,
+}
+
+/// Response lines collected for one UI command.
+struct ReplyCapture {
+    request_id: String,
+    output: Vec<String>,
+    error: Option<String>,
 }
 
 impl Inner {
@@ -133,6 +148,18 @@ impl Inner {
     }
 }
 
+/// Answer to a tmux command the UI asked for.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmuxCommandResponse {
+    pub request_id: String,
+    /// Output lines tmux produced, joined with newlines.
+    pub output: String,
+    /// `%error` payload, when tmux rejected the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Where gateway events go.
 ///
 /// Abstracted so the gateway can be driven end-to-end by tests against a real
@@ -140,6 +167,8 @@ impl Inner {
 pub trait TmuxGatewaySink: Send + Sync + 'static {
     fn state(&self, snapshot: &TmuxGatewaySnapshot);
     fn pane_output(&self, output: &TmuxPaneOutput);
+    /// Response to a UI-issued tmux command; ignored by sinks that do not care.
+    fn command_response(&self, _response: &TmuxCommandResponse) {}
 }
 
 /// Production sink: emits Tauri events to the webview.
@@ -147,6 +176,7 @@ pub struct AppGatewaySink {
     app: AppHandle,
     state_event: String,
     pane_event: String,
+    command_event: String,
 }
 
 impl AppGatewaySink {
@@ -155,6 +185,7 @@ impl AppGatewaySink {
             app,
             state_event: format!("tmux-state-{session_id}"),
             pane_event: format!("tmux-pane-output-{session_id}"),
+            command_event: format!("tmux-command-response-{session_id}"),
         }
     }
 }
@@ -166,6 +197,10 @@ impl TmuxGatewaySink for AppGatewaySink {
 
     fn pane_output(&self, output: &TmuxPaneOutput) {
         let _ = self.app.emit(&self.pane_event, output);
+    }
+
+    fn command_response(&self, response: &TmuxCommandResponse) {
+        let _ = self.app.emit(&self.command_event, response);
     }
 }
 
@@ -313,8 +348,12 @@ impl TmuxGateway {
         };
         let pane_outputs = std::mem::take(&mut inner.pane_outputs);
         let outgoing = std::mem::take(&mut inner.outgoing);
+        let replies = std::mem::take(&mut inner.replies);
         drop(inner);
 
+        for reply in &replies {
+            self.sink.command_response(reply);
+        }
         self.flush(outgoing, state, pane_outputs);
         passthrough
     }
@@ -393,6 +432,59 @@ impl TmuxGateway {
             format!("refresh-client -C {width}x{height}")
         };
         self.write_command(&command);
+    }
+
+    /// Pane tmux currently treats as active, or `None` when control mode is off.
+    ///
+    /// Used to redirect app-level input (quick commands, sync input, agent
+    /// commands) into the pane, because writes on the session itself are parsed
+    /// by tmux as its own command lines.
+    pub fn active_pane_id(&self) -> Option<String> {
+        let inner = self.lock();
+        if !inner.active {
+            return None;
+        }
+        let windows = &inner.snapshot.windows;
+        let window = inner
+            .snapshot
+            .active_window_id
+            .as_deref()
+            .and_then(|id| windows.iter().find(|window| window.id == id))
+            .or_else(|| windows.iter().find(|window| window.active))
+            .or_else(|| windows.first())?;
+        window
+            .panes
+            .iter()
+            .find(|pane| pane.active)
+            .or_else(|| window.panes.first())?
+            .id
+            .clone()
+    }
+
+    /// Pane that app-level input must be delivered to, if any.
+    ///
+    /// Control-mode commands the gateway sends itself arrive as
+    /// `InputOrigin::TerminalResponse` and must reach tmux, not a pane.
+    pub fn pane_for_app_write(&self, origin: InputOrigin) -> Option<String> {
+        if origin == InputOrigin::TerminalResponse {
+            return None;
+        }
+        self.active_pane_id()
+    }
+
+    /// Run a tmux command and route its output back to the UI.
+    ///
+    /// The response is bracketed by tagged `display-message` calls because tmux
+    /// answers each command in its own block and rejects a `;`-chained line
+    /// containing `capture-pane`.
+    pub fn run_command_with_reply(&self, command: &str, request_id: &str) {
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        self.write_command(&format!("display-message -p '{REPLY_BEGIN_TAG}{request_id}'"));
+        self.write_command(command);
+        self.write_command(&format!("display-message -p '{REPLY_END_TAG}{request_id}'"));
     }
 
     /// Replay one pane's current screen into its terminal view.
@@ -476,11 +568,18 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
             inner.in_block = true;
             inner.block_lines.clear();
         }
-        TmuxNotification::End { .. } | TmuxNotification::Error { .. } => {
+        TmuxNotification::End { .. } => {
             if inner.in_block {
                 inner.in_block = false;
                 let lines = std::mem::take(&mut inner.block_lines);
-                process_response_block(inner, &lines);
+                process_response_block(inner, &lines, false);
+            }
+        }
+        TmuxNotification::Error { .. } => {
+            if inner.in_block {
+                inner.in_block = false;
+                let lines = std::mem::take(&mut inner.block_lines);
+                process_response_block(inner, &lines, true);
             }
         }
         TmuxNotification::WindowAdd { window_id } => {
@@ -641,7 +740,40 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
 /// Tagged lines are self-identifying, so it does not matter how tmux groups them
 /// into `%begin`..`%end` blocks (it emits an extra empty block at setup, which
 /// makes positional correlation unreliable).
-fn process_response_block(inner: &mut Inner, lines: &[String]) {
+fn process_response_block(inner: &mut Inner, lines: &[String], is_error: bool) {
+    // UI command responses are bracketed by tags for the same reason: tmux
+    // answers every command in its own block.
+    if let Some(first) = lines.first().map(String::as_str) {
+        if let Some(rest) = first.strip_prefix(REPLY_BEGIN_TAG) {
+            inner.reply = Some(ReplyCapture {
+                request_id: rest.trim().to_string(),
+                output: Vec::new(),
+                error: None,
+            });
+            return;
+        }
+        if first.starts_with(REPLY_END_TAG) {
+            if let Some(capture) = inner.reply.take() {
+                inner.replies.push(TmuxCommandResponse {
+                    request_id: capture.request_id,
+                    output: capture.output.join("\n"),
+                    error: capture.error,
+                });
+            }
+            return;
+        }
+    }
+    if let Some(capture) = inner.reply.as_mut() {
+        if is_error {
+            if capture.error.is_none() {
+                capture.error = Some(lines.join("\n"));
+            }
+        } else {
+            capture.output.extend(lines.iter().cloned());
+        }
+        return;
+    }
+
     // Screen captures are bracketed by tags because tmux splits a chained
     // command into one block per command.
     if let Some(first) = lines.first().map(String::as_str) {
@@ -875,12 +1007,13 @@ mod tests {
     #[test]
     fn capture_response_becomes_a_pane_screen_replay() {
         let mut inner = Inner::default();
-        process_response_block(&mut inner, &["NYATERM-CAPTURE-BEGIN:%1".to_string()]);
+        process_response_block(&mut inner, &["NYATERM-CAPTURE-BEGIN:%1".to_string()], false);
         process_response_block(
             &mut inner,
             &["hello \\033[31mred".to_string(), "second line".to_string()],
+            false,
         );
-        process_response_block(&mut inner, &["NYATERM-CAPTURE-END:%1".to_string()]);
+        process_response_block(&mut inner, &["NYATERM-CAPTURE-END:%1".to_string()], false);
 
         assert_eq!(inner.pane_outputs.len(), 1);
         let (pane_id, data) = inner.pane_outputs.remove(0);
@@ -889,6 +1022,76 @@ mod tests {
         assert_eq!(
             data,
             "\x1b[2J\x1b[Hhello \x1b[31mred\r\nsecond line"
+        );
+    }
+
+    #[test]
+    fn app_writes_go_to_the_active_pane_but_control_commands_do_not() {
+        let (command_tx, command_rx) = crate::core::session_command_channel("tmux-write-test");
+        let gateway = TmuxGateway::new("tmux-write-test".to_string(), Arc::new(NullSink), command_tx);
+
+        // Before control mode nothing is redirected.
+        assert_eq!(gateway.pane_for_app_write(InputOrigin::QuickCommand), None);
+
+        gateway.filter("\x1bP1000p%begin 1 2 3\r\n%end 1 2 3\r\n");
+        let mut inner = gateway.lock();
+        process_response_block(
+            &mut inner,
+            &[
+                "NYATERM-WINDOW:@1\t0\tbash\t1\tb25e,80x24,0,0,1".to_string(),
+            ],
+            false,
+        );
+        process_response_block(
+            &mut inner,
+            &["NYATERM-PANE:@1\t0\t%1\t1".to_string()],
+            false,
+        );
+        drop(inner);
+
+        // Quick commands and other app-level input belong in the pane …
+        assert_eq!(
+            gateway.pane_for_app_write(InputOrigin::QuickCommand),
+            Some("%1".to_string())
+        );
+        assert_eq!(
+            gateway.pane_for_app_write(InputOrigin::AiAgent),
+            Some("%1".to_string())
+        );
+        // … while the gateway's own control commands must still reach tmux.
+        assert_eq!(
+            gateway.pane_for_app_write(InputOrigin::TerminalResponse),
+            None
+        );
+
+        drop(command_rx);
+    }
+
+    #[test]
+    fn command_replies_surface_output_and_errors() {
+        let mut inner = Inner::default();
+
+        // A command that answers plus a command tmux rejects.
+        process_response_block(&mut inner, &["NYATERM-REPLY:req-1".to_string()], false);
+        process_response_block(&mut inner, &["@0: 1 windows".to_string()], false);
+        process_response_block(&mut inner, &["NYATERM-REPLY-END:req-1".to_string()], false);
+        process_response_block(&mut inner, &["NYATERM-REPLY:req-2".to_string()], false);
+        process_response_block(
+            &mut inner,
+            &["parse error: usage: list-sessions".to_string()],
+            true,
+        );
+        process_response_block(&mut inner, &["NYATERM-REPLY-END:req-2".to_string()], false);
+
+        assert_eq!(inner.replies.len(), 2);
+        assert_eq!(inner.replies[0].request_id, "req-1");
+        assert_eq!(inner.replies[0].output, "@0: 1 windows");
+        assert_eq!(inner.replies[0].error, None);
+        assert_eq!(inner.replies[1].request_id, "req-2");
+        assert_eq!(inner.replies[1].output, "");
+        assert_eq!(
+            inner.replies[1].error.as_deref(),
+            Some("parse error: usage: list-sessions")
         );
     }
 

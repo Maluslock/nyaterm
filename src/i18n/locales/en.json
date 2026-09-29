@@ -2949,6 +2949,8 @@
     "translate": "Translate"
   },
   "tmux": {
+    "commandLine": "tmux command line",
+    "commandPlaceholder": "tmux command, Enter to run",
     "detach": "Detach from tmux (back to the shell)",
     "killWindow": "Kill tmux window",
     "newWindow": "New tmux window",

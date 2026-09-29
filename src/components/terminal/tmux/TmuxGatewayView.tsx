@@ -8,18 +8,23 @@
  * tmux windows are switched from the status strip **below** the panes (matching
  * where tmux itself puts its status line), and from WindTerm-style Alt hotkeys.
  */
-import { ChevronLeft, ChevronRight, LogOut, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { ChevronLeft, ChevronRight, LogOut, Plus, SquareTerminal, X } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   collectLayoutPanes,
+  runTmuxCommandWithReply,
   sendTmuxPaneInput,
+  tmuxCommandResponseEvent,
   resizeTmuxClient,
   runTmuxCommand,
+  type TmuxCommandResponse,
   type TmuxGatewaySnapshot,
   type TmuxLayoutNode,
   type TmuxWindow,
 } from "@/lib/tmuxGateway";
+import { logger } from "@/lib/logger";
 import { TmuxPaneTerminal, type TmuxPaneCellMetrics } from "./TmuxPaneTerminal";
 
 interface TmuxGatewayViewProps {
@@ -119,9 +124,73 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     [sessionId],
   );
 
+  // tmux command line: the only way to reach commands the strip has no button
+  // for (rename-window, resize-pane, select-layout, ...).
+  const [commandLine, setCommandLine] = useState<string | null>(null);
+  const [commandResult, setCommandResult] = useState<{
+    output: string;
+    error?: string;
+  } | null>(null);
+  const pendingRequestId = useRef<string | null>(null);
+  const commandInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (commandLine === null) return;
+    commandInputRef.current?.focus();
+  }, [commandLine]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<TmuxCommandResponse>(tmuxCommandResponseEvent(sessionId), (event) => {
+      if (disposed || event.payload.requestId !== pendingRequestId.current) return;
+      pendingRequestId.current = null;
+      setCommandResult({ output: event.payload.output, error: event.payload.error });
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [sessionId]);
+
+  const submitCommandLine = useCallback(() => {
+    const command = (commandLine ?? "").trim();
+    if (!command) {
+      setCommandLine(null);
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    pendingRequestId.current = requestId;
+    setCommandResult(null);
+    setCommandLine("");
+    void runTmuxCommandWithReply(sessionId, command, requestId).catch((error) => {
+      logger.warn({
+        domain: "session.lifecycle",
+        event: "tmux.command_failed",
+        message: "Failed to run a tmux command",
+        data: { session_id: sessionId, command },
+        error,
+      });
+    });
+  }, [commandLine, sessionId]);
+
   // WindTerm-style switching: tmux keeps its own prefix key free, and these
   // never reach the pane.
   useEffect(() => {
+    const MODIFIER_KEYS = new Set([
+      "Shift",
+      "Control",
+      "Alt",
+      "Meta",
+      "CapsLock",
+      "NumLock",
+      "ScrollLock",
+    ]);
     let prefixArmed = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === "b") {
@@ -134,6 +203,10 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
         return;
       }
       if (prefixArmed) {
+        // A prefixed binding that needs Shift sends Shift down first (Ctrl-b ",
+        // Ctrl-b %, Ctrl-b :). Consuming that as the binding broke every one of
+        // them, so keep waiting for the real key.
+        if (MODIFIER_KEYS.has(event.key)) return;
         prefixArmed = false;
         event.preventDefault();
         event.stopPropagation();
@@ -146,6 +219,12 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
           '"': "split-window -v",
           "[": "copy-mode",
         };
+        // ":" is Shift+";" on most layouts, and toolkit-synthesised events can
+        // report the unshifted key, so accept both.
+        if (event.key === ":" || event.key === ";") {
+          setCommandLine((current) => current ?? "");
+          return;
+        }
         const command = prefixCommands[event.key];
         if (command) {
           send(command);
@@ -300,6 +379,15 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       >
         <LogOut className="h-3 w-3" />
       </button>
+      <button
+        type="button"
+        aria-label={t("tmux.commandLine")}
+        title={t("tmux.commandLine")}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
+        onClick={() => setCommandLine((current) => current ?? "")}
+      >
+        <SquareTerminal className="h-3 w-3" />
+      </button>
     </div>
   );
 
@@ -323,6 +411,34 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
           </div>
         )}
       </div>
+      {commandLine !== null ? (
+        <div className="flex flex-col gap-1 border-t border-[var(--df-border)] px-2 py-1">
+          <input
+            ref={commandInputRef}
+            className="h-6 w-full min-w-0 rounded bg-[var(--df-bg-hover)] px-2 font-mono text-xs text-[var(--df-text)] outline-none"
+            value={commandLine}
+            placeholder={t("tmux.commandPlaceholder")}
+            aria-label={t("tmux.commandLine")}
+            spellCheck={false}
+            onChange={(event) => setCommandLine(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submitCommandLine();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setCommandLine(null);
+              }
+              event.stopPropagation();
+            }}
+          />
+          {commandResult ? (
+            <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-[var(--df-text-muted)]">
+              {commandResult.error ?? commandResult.output}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
       {strip}
     </div>
   );

@@ -1,8 +1,19 @@
-import { fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@/lib/invoke";
 import type { TmuxGatewaySnapshot, TmuxLayoutNode } from "@/lib/tmuxGateway";
 import { TmuxGatewayView } from "./TmuxGatewayView";
+
+const eventHandlers = vi.hoisted(
+  () => new Map<string, (event: { payload: unknown }) => void>(),
+);
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+    eventHandlers.set(name, handler);
+    return Promise.resolve(() => eventHandlers.delete(name));
+  },
+}));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -216,5 +227,59 @@ describe("TmuxGatewayView", () => {
       sessionId: "s1",
       command: "detach-client",
     });
+  });
+  it("opens the tmux command line with Ctrl-b : and runs the command", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    // A real keyboard sends Shift down before the colon: that must not be eaten
+    // as the prefixed key.
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+    fireEvent.keyDown(window, { key: ":", shiftKey: true });
+
+    // The strip button carries the same label, so target the input by its
+    // placeholder.
+    const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
+    fireEvent.change(input, { target: { value: "rename-window demo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_run_command", {
+      sessionId: "s1",
+      command: "rename-window demo",
+      requestId: expect.any(String),
+    });
+  });
+
+  it("shows the answer tmux gives, including a rejected command", async () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: ":" });
+    const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
+    fireEvent.change(input, { target: { value: "nonsense-command" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const calls = mockedInvoke.mock.calls;
+    const requestId = calls[calls.length - 1]?.[1] as { requestId: string };
+    const handler = eventHandlers.get("tmux-command-response-s1");
+    expect(handler).toBeTruthy();
+
+    await act(async () => {
+      handler?.({
+        payload: {
+          requestId: requestId.requestId,
+          output: "",
+          error: "parse error: unknown command: nonsense-command",
+        },
+      });
+    });
+
+    expect(
+      screen.getByText("parse error: unknown command: nonsense-command"),
+    ).toBeTruthy();
   });
 });

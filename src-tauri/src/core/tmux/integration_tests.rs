@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use super::gateway::{TmuxGateway, TmuxGatewaySink, TmuxPaneOutput};
+use super::gateway::{TmuxCommandResponse, TmuxGateway, TmuxGatewaySink, TmuxPaneOutput};
 use super::types::TmuxGatewaySnapshot;
 use crate::core::session::{SessionCommand, session_command_channel};
 
@@ -24,9 +24,19 @@ use crate::core::session::{SessionCommand, session_command_channel};
 struct CollectingSink {
     states: Mutex<Vec<TmuxGatewaySnapshot>>,
     outputs: Mutex<Vec<TmuxPaneOutput>>,
+    responses: Mutex<Vec<TmuxCommandResponse>>,
 }
 
 impl CollectingSink {
+    fn response_for(&self, request_id: &str) -> Option<TmuxCommandResponse> {
+        self.responses
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|response| response.request_id == request_id)
+            .cloned()
+    }
+
     fn latest_state(&self) -> Option<TmuxGatewaySnapshot> {
         self.states.lock().unwrap().last().cloned()
     }
@@ -58,6 +68,10 @@ impl TmuxGatewaySink for CollectingSink {
 
     fn pane_output(&self, output: &TmuxPaneOutput) {
         self.outputs.lock().unwrap().push(output.clone());
+    }
+
+    fn command_response(&self, response: &TmuxCommandResponse) {
+        self.responses.lock().unwrap().push(response.clone());
     }
 }
 
@@ -245,6 +259,52 @@ fn gateway_drives_a_real_tmux_control_client() {
             );
         }
     }
+
+    // ---- 2b2. Injected input and UI commands go through the pane ----------
+    // App-level writes must land in the pane: tmux parses session writes as its
+    // own command lines, so a quick command like `ls -la` would otherwise be a
+    // parse error. `active_pane_id` is what the SSH write path consults.
+    let active_pane = gateway.active_pane_id().expect("an active pane");
+    let expected_active = sink
+        .latest_state()
+        .unwrap_or_default()
+        .windows
+        .iter()
+        .flat_map(|window| window.panes.iter())
+        .find(|pane| pane.active)
+        .and_then(|pane| pane.id.clone())
+        .expect("a pane tmux marked active");
+    assert_eq!(
+        active_pane, expected_active,
+        "active pane should be the pane tmux reports as active"
+    );
+
+    // UI commands report their answer (and their error) back to the caller.
+    gateway.run_command_with_reply("list-windows -F '#{window_id}'", "req-ok");
+    let answered = wait_until(
+        || {
+            sink.response_for("req-ok")
+                .is_some_and(|response| response.error.is_none() && !response.output.is_empty())
+        },
+        Duration::from_secs(10),
+    );
+    let response = sink.response_for("req-ok").expect("a response");
+    assert!(answered, "no answer to a valid command: {response:?}");
+    assert!(
+        response.output.contains('@'),
+        "unexpected reply payload: {response:?}"
+    );
+
+    gateway.run_command_with_reply("nyaterm-not-a-command", "req-bad");
+    let rejected = wait_until(
+        || {
+            sink.response_for("req-bad")
+                .is_some_and(|response| response.error.is_some())
+        },
+        Duration::from_secs(10),
+    );
+    let response = sink.response_for("req-bad").expect("an error response");
+    assert!(rejected, "a bad command should report %error: {response:?}");
 
     // ---- 2c. A window created later has pane index 0 but a fresh `%N` id --
     // The layout's leaf number is the pane *id* number, not `#{pane_index}`:

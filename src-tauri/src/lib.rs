@@ -159,6 +159,7 @@ pub fn run() {
             cmd::tmux::tmux_gateway_input,
             cmd::tmux::tmux_gateway_resize,
             cmd::tmux::tmux_gateway_capture_pane,
+            cmd::tmux::tmux_gateway_run_command,
             cmd::tmux::tmux_gateway_command,
             cmd::external_open::claim_external_open_requests,
             cmd::updater::check_portable_update,

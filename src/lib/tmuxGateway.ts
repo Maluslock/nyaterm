@@ -63,7 +63,15 @@ export interface TmuxPaneOutput {
   data: string;
 }
 
+export interface TmuxCommandResponse {
+  requestId: string;
+  output: string;
+  error?: string;
+}
+
 export const tmuxStateEvent = (sessionId: string) => `tmux-state-${sessionId}`;
+export const tmuxCommandResponseEvent = (sessionId: string) =>
+  `tmux-command-response-${sessionId}`;
 export const tmuxPaneOutputEvent = (sessionId: string) =>
   `tmux-pane-output-${sessionId}`;
 
@@ -107,6 +115,20 @@ export async function requestTmuxPaneCapture(
   paneId: string,
 ): Promise<void> {
   await invoke("tmux_gateway_capture_pane", { sessionId, paneId });
+}
+
+/**
+ * Run a tmux command from the UI's command line.
+ *
+ * The answer (including a tmux `%error`) comes back on
+ * `tmux-command-response-<session>`, correlated by `requestId`.
+ */
+export async function runTmuxCommandWithReply(
+  sessionId: string,
+  command: string,
+  requestId: string,
+): Promise<void> {
+  await invoke("tmux_gateway_run_command", { sessionId, command, requestId });
 }
 
 /** Run a tmux command on behalf of the UI (split-window, kill-pane, ...). */

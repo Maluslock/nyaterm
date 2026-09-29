@@ -66,6 +66,22 @@ pub async fn tmux_gateway_capture_pane(
     Ok(())
 }
 
+/// Run a tmux command from the UI's command line and report its answer.
+///
+/// The response arrives on `tmux-command-response-<session>`; `request_id`
+/// correlates it with the submitted line.
+#[tauri::command]
+pub async fn tmux_gateway_run_command(
+    manager: State<'_, Arc<TmuxGatewayManager>>,
+    session_id: String,
+    command: String,
+    request_id: String,
+) -> AppResult<()> {
+    let gateway = gateway_for(&manager, &session_id)?;
+    gateway.run_command_with_reply(&command, &request_id);
+    Ok(())
+}
+
 /// Run a tmux command on behalf of the UI (split-window, kill-pane, ...).
 #[tauri::command]
 pub async fn tmux_gateway_command(

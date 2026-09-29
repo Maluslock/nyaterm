@@ -1192,6 +1192,32 @@ async fn handle_osc_result(
     }
 }
 
+/// Deliver an app-level session write to the active tmux pane.
+///
+/// Returns `true` when control mode consumed the write. Control-mode commands
+/// the gateway itself sends are excluded by the caller (`TerminalResponse`).
+fn forward_write_to_tmux_pane(
+    app: &AppHandle,
+    session_id: &str,
+    origin: InputOrigin,
+    data: &[u8],
+) -> bool {
+    let Some(manager) = app.try_state::<Arc<crate::core::tmux::TmuxGatewayManager>>() else {
+        return false;
+    };
+    let Some(gateway) = manager.get(session_id) else {
+        return false;
+    };
+    let Some(pane_id) = gateway.pane_for_app_write(origin) else {
+        return false;
+    };
+    let Ok(text) = std::str::from_utf8(data) else {
+        return false;
+    };
+    gateway.send_pane_input(&pane_id, text);
+    true
+}
+
 pub(super) async fn ssh_io_loop(
     app: AppHandle,
     session_id: String,
@@ -1332,6 +1358,14 @@ pub(super) async fn ssh_io_loop(
                         if zmodem_transfer.is_some()
                             || zmodem_upload_drain.should_suppress(std::time::Instant::now())
                         {
+                            continue;
+                        }
+                        // tmux control mode owns the session's stdin: tmux parses
+                        // every line written there as one of its own commands, so an
+                        // injected quick command like `ls -la` becomes
+                        // `parse error: usage: list-sessions`. Anything the app sends
+                        // for the shell therefore has to go to the active pane.
+                        if forward_write_to_tmux_pane(&app, &session_id, origin, &data) {
                             continue;
                         }
                         handle_input_before_initial_injection(
