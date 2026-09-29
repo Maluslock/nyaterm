@@ -22,10 +22,18 @@ import {
   X,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import {
   collectLayoutPanes,
+  requestTmuxPaneFind,
   runTmuxCommandWithReply,
   sendTmuxPaneInput,
   tmuxCommandResponseEvent,
@@ -37,7 +45,11 @@ import {
   type TmuxWindow,
 } from "@/lib/tmuxGateway";
 import { logger } from "@/lib/logger";
-import { type SplitAxis, nextPaneResize, resizeCommand } from "@/lib/tmuxPaneResize";
+import {
+  type SplitAxis,
+  nextPaneResize,
+  resizeCommand,
+} from "@/lib/tmuxPaneResize";
 import { TmuxPaneTerminal, type TmuxPaneCellMetrics } from "./TmuxPaneTerminal";
 
 interface TmuxGatewayViewProps {
@@ -59,9 +71,16 @@ interface LayoutNodeProps {
     sentCells: number,
   ) => number;
   /** Resize by whole cells, for the keyboard path. */
-  onStepPane: (paneId: string | undefined, axis: SplitAxis, cells: number) => void;
+  onStepPane: (
+    paneId: string | undefined,
+    axis: SplitAxis,
+    cells: number,
+  ) => void;
   /** Right-click on a pane. */
-  onPaneMenu: (paneId: string | undefined, point: { x: number; y: number }) => void;
+  onPaneMenu: (
+    paneId: string | undefined,
+    point: { x: number; y: number },
+  ) => void;
 }
 
 /** Pane at the given edge of a subtree — the one a divider drag resizes. */
@@ -160,7 +179,9 @@ function LayoutNodeView({
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={Math.round(
-                (isColumns ? child.width / node.width : child.height / node.height) * 100,
+                (isColumns
+                  ? child.width / node.width
+                  : child.height / node.height) * 100,
               )}
               className={`m-0 shrink-0 border-0 bg-[var(--df-border)] hover:bg-[var(--df-primary)] focus:bg-[var(--df-primary)] focus:outline-none ${
                 isColumns ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
@@ -259,7 +280,6 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     cellMetricsRef.current = metrics;
   }, []);
 
-
   const activeWindow: TmuxWindow | null =
     snapshot.windows.find((window) => window.id === snapshot.activeWindowId) ??
     snapshot.windows[0] ??
@@ -272,7 +292,9 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
 
   const handleSelectPane = useCallback(
     (paneId: string) => {
-      void runTmuxCommand(sessionId, `select-pane -t ${paneId}`).catch(() => {});
+      void runTmuxCommand(sessionId, `select-pane -t ${paneId}`).catch(
+        () => {},
+      );
     },
     [sessionId],
   );
@@ -287,7 +309,12 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   // Dragging a divider cannot resize locally — the layout mirrors tmux — so the
   // drag is translated into `resize-pane` commands in cell units.
   const handlePaneResize = useCallback(
-    (paneId: string | undefined, axis: SplitAxis, deltaPx: number, sentCells: number) => {
+    (
+      paneId: string | undefined,
+      axis: SplitAxis,
+      deltaPx: number,
+      sentCells: number,
+    ) => {
       const metrics = cellMetricsRef.current;
       const step = nextPaneResize({
         paneId,
@@ -344,9 +371,10 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
 
   // Inline window rename, opened by double-clicking a window tab.
-  const [renamingWindow, setRenamingWindow] = useState<{ id: string; name: string } | null>(
-    null,
-  );
+  const [renamingWindow, setRenamingWindow] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const submitRename = useCallback(() => {
     const target = renamingWindow;
@@ -378,11 +406,18 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<TmuxCommandResponse>(tmuxCommandResponseEvent(sessionId), (event) => {
-      if (disposed || event.payload.requestId !== pendingRequestId.current) return;
-      pendingRequestId.current = null;
-      setCommandResult({ output: event.payload.output, error: event.payload.error });
-    })
+    void listen<TmuxCommandResponse>(
+      tmuxCommandResponseEvent(sessionId),
+      (event) => {
+        if (disposed || event.payload.requestId !== pendingRequestId.current)
+          return;
+        pendingRequestId.current = null;
+        setCommandResult({
+          output: event.payload.output,
+          error: event.payload.error,
+        });
+      },
+    )
       .then((dispose) => {
         if (disposed) dispose();
         else unlisten = dispose;
@@ -406,15 +441,17 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     pendingRequestId.current = requestId;
     setCommandResult(null);
     setCommandLine("");
-    void runTmuxCommandWithReply(sessionId, command, requestId).catch((error) => {
-      logger.warn({
-        domain: "session.lifecycle",
-        event: "tmux.command_failed",
-        message: "Failed to run a tmux command",
-        data: { session_id: sessionId, command },
-        error,
-      });
-    });
+    void runTmuxCommandWithReply(sessionId, command, requestId).catch(
+      (error) => {
+        logger.warn({
+          domain: "session.lifecycle",
+          event: "tmux.command_failed",
+          message: "Failed to run a tmux command",
+          data: { session_id: sessionId, command },
+          error,
+        });
+      },
+    );
   }, [commandLine, sessionId]);
 
   // WindTerm-style switching: tmux keeps its own prefix key free, and these
@@ -443,7 +480,12 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       ) {
         return;
       }
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === "b") {
+      if (
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key === "b"
+      ) {
         // Pane keystrokes are forwarded with `send-keys`, so tmux's own prefix
         // never reaches the tmux client. Swallow it and treat the next key as a
         // prefixed binding, so the familiar Ctrl-b d still detaches.
@@ -485,9 +527,11 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
           // Not emulated here: hand tmux's prefix through to the pane verbatim.
           // Only a real character qualifies — forwarding a named key such as
           // "ArrowLeft" typed its name into the shell.
-          void sendTmuxPaneInput(sessionId, activePaneId, `\u0002${event.key}`).catch(
-            () => {},
-          );
+          void sendTmuxPaneInput(
+            sessionId,
+            activePaneId,
+            `\u0002${event.key}`,
+          ).catch(() => {});
         }
         return;
       }
@@ -708,9 +752,13 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
         }}
       >
         <option value="">{t("tmux.layout")}</option>
-        <option value="even-horizontal">{t("tmux.layoutEvenHorizontal")}</option>
+        <option value="even-horizontal">
+          {t("tmux.layoutEvenHorizontal")}
+        </option>
         <option value="even-vertical">{t("tmux.layoutEvenVertical")}</option>
-        <option value="main-horizontal">{t("tmux.layoutMainHorizontal")}</option>
+        <option value="main-horizontal">
+          {t("tmux.layoutMainHorizontal")}
+        </option>
         <option value="tiled">{t("tmux.layoutTiled")}</option>
       </select>
       <button
@@ -764,9 +812,23 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
             style={{ left: paneMenu.x, top: paneMenu.y }}
             onPointerDown={(event) => event.stopPropagation()}
           >
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full truncate px-3 py-1 text-left hover:bg-[var(--df-bg-hover)]"
+              onClick={() => {
+                requestTmuxPaneFind(sessionId, paneMenu.paneId);
+                setPaneMenu(null);
+              }}
+            >
+              {t("terminalCtx.find")}
+            </button>
             {(
               [
-                ["tmux.splitHorizontal", `split-window -h -t ${paneMenu.paneId}`],
+                [
+                  "tmux.splitHorizontal",
+                  `split-window -h -t ${paneMenu.paneId}`,
+                ],
                 ["tmux.splitVertical", `split-window -v -t ${paneMenu.paneId}`],
                 ["tmux.zoomPane", `resize-pane -t ${paneMenu.paneId} -Z`],
                 ["tmux.swapPaneUp", `swap-pane -t ${paneMenu.paneId} -U`],

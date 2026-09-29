@@ -146,7 +146,9 @@ export async function runTmuxCommand(
 }
 
 /** Flatten every leaf pane in a layout tree. */
-export function collectLayoutPanes(node: TmuxLayoutNode | undefined): TmuxPane[] {
+export function collectLayoutPanes(
+  node: TmuxLayoutNode | undefined,
+): TmuxPane[] {
   if (!node) return [];
   if (node.kind === "leaf") return [node.pane];
   return node.children.flatMap(collectLayoutPanes);
@@ -155,4 +157,19 @@ export function collectLayoutPanes(node: TmuxLayoutNode | undefined): TmuxPane[]
 /** tmux quits with this marker in `%exit`; used to label the detached state. */
 export function isGatewayExited(snapshot: TmuxGatewaySnapshot | null): boolean {
   return snapshot?.exited === true;
+}
+
+/**
+ * Window event asking one pane to open its find bar.
+ *
+ * The pane menu is rendered by the gateway view while the search state belongs
+ * to the pane's own terminal, so the request travels as an event instead of
+ * lifting every pane's search state up into the view.
+ */
+export const TMUX_PANE_FIND_EVENT = "nyaterm:tmux-pane-find";
+
+export function requestTmuxPaneFind(sessionId: string, paneId?: string): void {
+  window.dispatchEvent(
+    new CustomEvent(TMUX_PANE_FIND_EVENT, { detail: { sessionId, paneId } }),
+  );
 }

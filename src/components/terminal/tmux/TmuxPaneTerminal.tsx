@@ -10,17 +10,22 @@
  * timestamp / line-number gutter — rather than reimplementing them.
  */
 import { listen } from "@tauri-apps/api/event";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTerminalAppSettings } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import { useCommandHistory } from "@/hooks/useCommandHistory";
 import { useKeywordHighlighter } from "@/hooks/useKeywordHighlighter";
+import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
+import { useTerminalSearch } from "@/hooks/useTerminalSearch";
 import { buildTerminalThemeColors } from "@/lib/backgroundImage";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { buildTerminalCommandInput } from "@/lib/sessionInput";
+import { matchesKeyEvent } from "@/lib/shortcutRegistry";
+import { TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT } from "@/lib/terminalSearch";
 import {
   applyTerminalInputData,
   createTerminalInputState,
@@ -28,15 +33,17 @@ import {
 } from "@/lib/terminalInputTracker";
 import { applyTmuxPaneInput } from "@/lib/tmuxPaneInput";
 import {
+  requestTmuxPaneCapture,
   sendTmuxPaneInput,
+  TMUX_PANE_FIND_EVENT,
+  tmuxPaneOutputEvent,
   type TmuxPane,
   type TmuxPaneOutput,
-  requestTmuxPaneCapture,
-  tmuxPaneOutputEvent,
 } from "@/lib/tmuxGateway";
 import { commandStartsSuggestionSuppressingProgram } from "@/lib/commandSuggestionSuppression";
 import CommandSuggestions from "../CommandSuggestions";
 import TerminalGutter from "../TerminalGutter";
+import TerminalSearchBar from "../TerminalSearchBar";
 import "@xterm/xterm/css/xterm.css";
 
 export interface TmuxPaneCellMetrics {
@@ -51,7 +58,10 @@ interface TmuxPaneTerminalProps {
   onSelect: (paneId: string) => void;
   onCellMetrics?: (metrics: TmuxPaneCellMetrics) => void;
   /** Right-click on the pane: open the view's pane menu at this point. */
-  onContextMenu?: (paneId: string | undefined, point: { x: number; y: number }) => void;
+  onContextMenu?: (
+    paneId: string | undefined,
+    point: { x: number; y: number },
+  ) => void;
 }
 
 function resolveFontSize(value: unknown): number {
@@ -80,13 +90,81 @@ export function TmuxPaneTerminal({
     appearance,
     interaction,
     terminal: terminalSettings,
+    keybindings,
   } = useTerminalAppSettings();
   const terminalThemeColors = useMemo(
     () => buildTerminalThemeColors(theme.colors.terminal, appearance),
     [appearance, theme],
   );
 
-  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(
+    null,
+  );
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [searchAddon, setSearchAddon] = useState<SearchAddon | null>(null);
+
+  // A pane is an ordinary local xterm, so the app's own search bar works here
+  // unchanged — which is why finding something on a tmux screen does not have to
+  // go through tmux's copy-mode (`Ctrl-b [`).
+  const {
+    registerSearchAddon,
+    showSearchBar,
+    setShowSearchBar,
+    searchQuery,
+    setSearchQuery,
+    searchState,
+    searchFlags,
+    setSearchFlag,
+    wrapAround,
+    setWrapAround,
+    activeMode,
+    setActiveMode,
+    historyState,
+    handleSearchNext,
+    handleSearchPrev,
+    handleCloseSearch,
+  } = useTerminalSearch(terminalRef, {
+    terminal: terminalInstance,
+    sessionId,
+    visible: isActive,
+  });
+
+  const openFind = useCallback(() => {
+    setShowSearchBar(true);
+    // When the bar is already open its focus effect does not rerun.
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [setShowSearchBar]);
+
+  /** Read by the xterm key handler, which is installed once per terminal. */
+  const findRef = useRef({
+    open: openFind,
+    close: handleCloseSearch,
+    shown: false,
+  });
+  findRef.current.open = openFind;
+  findRef.current.close = handleCloseSearch;
+  findRef.current.shown = showSearchBar;
+
+  useEffect(() => {
+    registerSearchAddon(searchAddon);
+    return () => registerSearchAddon(null);
+  }, [registerSearchAddon, searchAddon]);
+
+  // Right-clicking the pane offers the same search; the menu lives in the view.
+  useEffect(() => {
+    const onFindRequested = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ sessionId?: string; paneId?: string }>
+      ).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      if (detail.paneId && detail.paneId !== paneIdRef.current) return;
+      findRef.current.open();
+    };
+    window.addEventListener(TMUX_PANE_FIND_EVENT, onFindRequested);
+    return () =>
+      window.removeEventListener(TMUX_PANE_FIND_EVENT, onFindRequested);
+  }, [sessionId]);
 
   const commandSuggestionsEnabled = interaction.command_suggestions_enabled;
   const commandSuggestionMinChars = interaction.command_suggestion_min_chars;
@@ -118,6 +196,8 @@ export function TmuxPaneTerminal({
   // Read inside stable callbacks without making them depend on settings.
   const stampConfigRef = useRef({ enabled: showTimestamps, paneKey });
   stampConfigRef.current = { enabled: showTimestamps, paneKey };
+  const keybindingsRef = useRef(keybindings);
+  keybindingsRef.current = keybindings;
   const refreshFrameRef = useRef<number | null>(null);
 
   /**
@@ -168,7 +248,8 @@ export function TmuxPaneTerminal({
     if (!terminal || !onCellMetrics) return;
     // `.xterm-screen` is exactly cols x rows cells, so this is an exact
     // measurement rather than a guess from font metrics.
-    const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+    const screen =
+      terminal.element?.querySelector<HTMLElement>(".xterm-screen");
     if (!screen || !terminal.cols || !terminal.rows) return;
     const width = screen.clientWidth;
     const height = screen.clientHeight;
@@ -184,7 +265,8 @@ export function TmuxPaneTerminal({
     (options?: { allowEmpty?: boolean }) => {
       const terminal = terminalRef.current;
       // Full-screen programs own the alternate screen; never suggest there.
-      if (!terminal || terminal.buffer.active.type === "alternate") return false;
+      if (!terminal || terminal.buffer.active.type === "alternate")
+        return false;
       if (suggestionSuppressedRef.current) return false;
       const state = inputStateRef.current;
       if (options?.allowEmpty) {
@@ -267,6 +349,34 @@ export function TmuxPaneTerminal({
     terminal.open(container);
     terminalRef.current = terminal;
     setTerminalInstance(terminal);
+
+    // The pane's own find binding: its keystrokes go to the pane process, so the
+    // host terminal's shortcut handler never sees them.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      if (
+        matchesKeyEvent(
+          resolveShortcutKeys("terminal.find", keybindingsRef.current),
+          event,
+        )
+      ) {
+        event.preventDefault();
+        findRef.current.open();
+        return false;
+      }
+      if (event.key === "Escape" && findRef.current.shown) {
+        findRef.current.close();
+        return false;
+      }
+      return true;
+    });
+
+    const paneSearchAddon = new SearchAddon({
+      highlightLimit: TERMINAL_SEARCH_VISIBLE_MATCH_LIMIT,
+    });
+    terminal.loadAddon(paneSearchAddon);
+    setSearchAddon(paneSearchAddon);
+
     reportCellMetrics();
 
     const dataSubscription = terminal.onData((data) => {
@@ -322,6 +432,7 @@ export function TmuxPaneTerminal({
       terminal.dispose();
       terminalRef.current = null;
       setTerminalInstance(null);
+      setSearchAddon(null);
       lineTimestampsRef.current.clear();
     };
   }, [sessionId, reportCellMetrics, stampWrittenLines, syncSuggestions]);
@@ -390,7 +501,7 @@ export function TmuxPaneTerminal({
         event.preventDefault();
         onContextMenu?.(pane.id, { x: event.clientX, y: event.clientY });
       }}
-      className={`flex h-full w-full min-h-0 min-w-0 overflow-hidden bg-[var(--df-bg-terminal)] ${
+      className={`relative flex h-full w-full min-h-0 min-w-0 overflow-hidden bg-[var(--df-bg-terminal)] ${
         isActive ? "ring-1 ring-inset ring-[var(--df-accent)]" : ""
       }`}
     >
@@ -411,6 +522,23 @@ export function TmuxPaneTerminal({
         </div>
       )}
       <div ref={containerRef} className="h-full w-full min-h-0 min-w-0" />
+      <TerminalSearchBar
+        show={showSearchBar && isActive}
+        inputRef={searchInputRef}
+        searchQuery={searchQuery}
+        searchState={searchState}
+        searchFlags={searchFlags}
+        wrapAround={wrapAround}
+        activeMode={activeMode}
+        historyState={historyState}
+        setSearchQuery={setSearchQuery}
+        onModeChange={setActiveMode}
+        onSearchFlagChange={setSearchFlag}
+        onWrapAroundChange={setWrapAround}
+        onNext={handleSearchNext}
+        onPrev={handleSearchPrev}
+        onClose={handleCloseSearch}
+      />
       <CommandSuggestions
         suggestions={suggestions}
         visible={
