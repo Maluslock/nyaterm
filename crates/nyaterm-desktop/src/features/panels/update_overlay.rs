@@ -80,8 +80,6 @@ impl NyaTermApp {
             .flex()
             .flex_col()
             .gap_4()
-            .max_h(px((viewport_h - 32.).max(220.)))
-            .overflow_y_scrollbar()
             .child(
                 div()
                     .flex()
@@ -149,7 +147,7 @@ impl NyaTermApp {
                     this.child(
                         div()
                             .id("update-release-notes")
-                            .max_h(px((viewport_h * 0.42).clamp(120., 320.)))
+                            .h(px((viewport_h * 0.42).clamp(120., 320.)))
                             .overflow_y_scrollbar()
                             .rounded_md()
                             .border_1()
