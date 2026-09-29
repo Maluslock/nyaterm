@@ -30,16 +30,27 @@ vi.mock("./TmuxPaneTerminal", () => ({
   TmuxPaneTerminal: ({
     pane,
     onCellMetrics,
+    onContextMenu,
   }: {
     pane: { id?: string; index: number };
     onCellMetrics: (metrics: { cellWidth: number; cellHeight: number }) => void;
+    onContextMenu?: (paneId: string | undefined, point: { x: number; y: number }) => void;
   }) => {
     // Stand in for the cell metrics a real xterm reports, so divider drags can
-    // be translated into cell counts.
+    // be translated into cell counts, and for the right-click the real terminal
+    // forwards to the view.
     useEffect(() => {
       onCellMetrics({ cellWidth: 8, cellHeight: 16 });
     }, [onCellMetrics]);
-    return <div data-testid={`pane-${pane.id ?? pane.index}`} />;
+    return (
+      <div
+        data-testid={`pane-${pane.id ?? pane.index}`}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onContextMenu?.(pane.id, { x: event.clientX, y: event.clientY });
+        }}
+      />
+    );
   },
 }));
 
@@ -487,5 +498,31 @@ describe("TmuxGatewayView", () => {
       sessionId: "s1",
       command: "split-window -v",
     });
+  });
+  it("offers pane actions on right-click", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getByTestId, getByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.contextMenu(getByTestId("pane-%0"), { clientX: 10, clientY: 10 });
+    fireEvent.click(getByRole("menuitem", { name: "tmux.zoomPane" }));
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -t %0 -Z",
+    });
+  });
+
+  it("closes the pane menu after an action", () => {
+    const { getByTestId, getByRole, queryByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.contextMenu(getByTestId("pane-%0"), { clientX: 10, clientY: 10 });
+    fireEvent.click(getByRole("menuitem", { name: "tmux.killPane" }));
+
+    expect(queryByRole("menu")).toBeNull();
   });
 });

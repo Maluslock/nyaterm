@@ -50,6 +50,8 @@ interface TmuxPaneTerminalProps {
   isActive: boolean;
   onSelect: (paneId: string) => void;
   onCellMetrics?: (metrics: TmuxPaneCellMetrics) => void;
+  /** Right-click on the pane: open the view's pane menu at this point. */
+  onContextMenu?: (paneId: string | undefined, point: { x: number; y: number }) => void;
 }
 
 function resolveFontSize(value: unknown): number {
@@ -63,6 +65,7 @@ export function TmuxPaneTerminal({
   isActive,
   onSelect,
   onCellMetrics,
+  onContextMenu,
 }: TmuxPaneTerminalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -383,6 +386,10 @@ export function TmuxPaneTerminal({
       data-tmux-pane={pane.id ?? pane.index}
       data-active={isActive ? "true" : "false"}
       onMouseDown={handleMouseDown}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onContextMenu?.(pane.id, { x: event.clientX, y: event.clientY });
+      }}
       className={`flex h-full w-full min-h-0 min-w-0 overflow-hidden bg-[var(--df-bg-terminal)] ${
         isActive ? "ring-1 ring-inset ring-[var(--df-accent)]" : ""
       }`}

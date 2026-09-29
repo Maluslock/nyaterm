@@ -60,6 +60,8 @@ interface LayoutNodeProps {
   ) => number;
   /** Resize by whole cells, for the keyboard path. */
   onStepPane: (paneId: string | undefined, axis: SplitAxis, cells: number) => void;
+  /** Right-click on a pane. */
+  onPaneMenu: (paneId: string | undefined, point: { x: number; y: number }) => void;
 }
 
 /** Pane at the given edge of a subtree — the one a divider drag resizes. */
@@ -85,6 +87,7 @@ function LayoutNodeView({
   onCellMetrics,
   onResizePane,
   onStepPane,
+  onPaneMenu,
 }: LayoutNodeProps) {
   const { t } = useTranslation();
 
@@ -96,6 +99,7 @@ function LayoutNodeView({
         isActive={activePaneId !== null && node.pane.id === activePaneId}
         onSelect={onSelectPane}
         onCellMetrics={onCellMetrics}
+        onContextMenu={onPaneMenu}
       />
     );
   }
@@ -178,6 +182,7 @@ function LayoutNodeView({
               onCellMetrics={onCellMetrics}
               onResizePane={onResizePane}
               onStepPane={onStepPane}
+              onPaneMenu={onPaneMenu}
             />
           </div>
         </Fragment>
@@ -270,6 +275,16 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     [send],
   );
 
+  const openPaneMenu = useCallback(
+    (paneId: string | undefined, point: { x: number; y: number }) => {
+      const container = containerRef.current;
+      if (!paneId || !container) return;
+      const rect = container.getBoundingClientRect();
+      setPaneMenu({ paneId, x: point.x - rect.left, y: point.y - rect.top });
+    },
+    [],
+  );
+
   const handlePaneStep = useCallback(
     (paneId: string | undefined, axis: SplitAxis, cells: number) => {
       if (!paneId) return;
@@ -290,6 +305,13 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const commandLineOpenRef = useRef(false);
   commandLineOpenRef.current = commandLine !== null;
+  // Pane context menu, positioned relative to the pane container.
+  const [paneMenu, setPaneMenu] = useState<{
+    paneId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
   // Command history survives view remounts, like a shell's.
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
 
@@ -310,6 +332,20 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     if (commandLine === null) return;
     commandInputRef.current?.focus();
   }, [commandLine]);
+
+  useEffect(() => {
+    if (!paneMenu) return;
+    const close = () => setPaneMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [paneMenu]);
 
   useEffect(() => {
     let disposed = false;
@@ -681,6 +717,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
             onCellMetrics={handleCellMetrics}
             onResizePane={handlePaneResize}
             onStepPane={handlePaneStep}
+            onPaneMenu={openPaneMenu}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-[var(--df-text-muted)]">
@@ -689,6 +726,40 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
               : null}
           </div>
         )}
+        {paneMenu ? (
+          <div
+            role="menu"
+            aria-label={t("tmux.paneMenu")}
+            className="absolute z-20 min-w-40 rounded border border-[var(--df-border)] bg-[var(--df-bg-panel)] py-1 text-xs shadow-lg"
+            style={{ left: paneMenu.x, top: paneMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            {(
+              [
+                ["tmux.splitHorizontal", `split-window -h -t ${paneMenu.paneId}`],
+                ["tmux.splitVertical", `split-window -v -t ${paneMenu.paneId}`],
+                ["tmux.zoomPane", `resize-pane -t ${paneMenu.paneId} -Z`],
+                ["tmux.swapPaneUp", `swap-pane -t ${paneMenu.paneId} -U`],
+                ["tmux.swapPaneDown", `swap-pane -t ${paneMenu.paneId} -D`],
+                ["tmux.breakPane", `break-pane -s ${paneMenu.paneId}`],
+                ["tmux.killPane", `kill-pane -t ${paneMenu.paneId}`],
+              ] as const
+            ).map(([labelKey, command]) => (
+              <button
+                key={command}
+                type="button"
+                role="menuitem"
+                className="block w-full truncate px-3 py-1 text-left hover:bg-[var(--df-bg-hover)]"
+                onClick={() => {
+                  send(command);
+                  setPaneMenu(null);
+                }}
+              >
+                {t(labelKey)}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
       {commandLine !== null ? (
         <div className="flex flex-col gap-1 border-t border-[var(--df-border)] px-2 py-1">
