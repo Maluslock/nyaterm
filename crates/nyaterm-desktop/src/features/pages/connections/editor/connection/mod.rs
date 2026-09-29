@@ -1242,7 +1242,7 @@ impl NyaTermApp {
             .border_color(rgb(palette.border))
             .bg(rgb(palette.surface))
             .shadow_lg()
-            .child(div().h(px(220.)).overflow_y_scrollbar().child(icon_grid))
+            .child(icon_grid)
             .child(
                 nyaterm_ui::NyaButton::new("import-custom-icon", t!("dialog.importCustomIcon"))
                     .on_click(cx.listener(|app, _, window, cx| {
@@ -2796,8 +2796,8 @@ mod tests {
 
     use gpui::{
         AppContext as _, Entity, InteractiveElement as _, IntoElement, Modifiers,
-        ParentElement as _, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Styled as _,
-        TestAppContext, VisualTestContext, div, point, px,
+        ParentElement as _, Render, RenderImage, Styled as _, TestAppContext, VisualTestContext,
+        div, px,
     };
     use nyaterm_core::{AppRuntime, Group, RuntimeMode, models::sessions::ConnectionCustomIcon};
 
@@ -3122,13 +3122,29 @@ mod tests {
     }
 
     #[gpui::test]
-    fn connection_editor_icon_picker_scrolls_custom_icons_without_moving_actions(
-        cx: &mut TestAppContext,
-    ) {
-        let test_dir = TestConfigDir::new("nyaterm-connection-icon-picker-scroll");
+    fn connection_editor_icon_picker_grows_with_custom_icons(cx: &mut TestAppContext) {
+        let test_dir = TestConfigDir::new("nyaterm-connection-icon-picker-growth");
         let (app, vcx) = hosted_editor(cx, test_dir.path(), 640., 720., 12.);
         vcx.update(|_, cx| {
             app.update(cx, |app, cx| {
+                app.set_connection_icon_picker_open(true, cx);
+            });
+        });
+        for _ in 0..3 {
+            draw_editor(&app, vcx);
+        }
+        let grid_before = vcx
+            .debug_bounds("connection-editor-icon-grid")
+            .expect("icon grid should render inside the picker");
+        let popup_before = vcx
+            .debug_bounds("connection-editor-icon-popover-content")
+            .expect("icon picker should be open");
+        let auto_detect_before = vcx
+            .debug_bounds("connection-editor-icon-auto-detect")
+            .expect("auto-detect action should render below the icon grid");
+
+        vcx.update(|_, cx| {
+            app.update(cx, |app, _| {
                 let icon = Arc::new(RenderImage::new(vec![image::Frame::new(
                     image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255])),
                 )]));
@@ -3147,45 +3163,25 @@ mod tests {
                     .collect::<HashMap<_, _>>();
                 app.connection_state.custom_icons.records = records;
                 app.connection_state.custom_icons.images = Arc::new(images);
-                app.set_connection_icon_picker_open(true, cx);
             });
         });
         for _ in 0..3 {
             draw_editor(&app, vcx);
         }
 
-        let grid_before = vcx
-            .debug_bounds("connection-editor-icon-grid")
-            .expect("icon grid should render inside the picker");
-        let popup_before = vcx
-            .debug_bounds("connection-editor-icon-popover-content")
-            .expect("icon picker should be open");
-        let auto_detect_before = vcx
-            .debug_bounds("connection-editor-icon-auto-detect")
-            .expect("auto-detect action should render below the icon grid");
-        assert!(grid_before.size.height > px(220.));
-        vcx.simulate_event(ScrollWheelEvent {
-            position: point(grid_before.left() + px(20.), grid_before.top() + px(20.)),
-            delta: ScrollDelta::Pixels(point(px(0.), px(-48.))),
-            ..Default::default()
-        });
-        draw_editor(&app, vcx);
-
         let grid_after = vcx
             .debug_bounds("connection-editor-icon-grid")
-            .expect("icon grid should remain scrollable");
+            .expect("icon grid should render inside the picker");
         let popup_after = vcx
             .debug_bounds("connection-editor-icon-popover-content")
-            .expect("icon picker should remain open");
+            .expect("icon picker should be open");
         let auto_detect_after = vcx
             .debug_bounds("connection-editor-icon-auto-detect")
-            .expect("auto-detect action should remain below the icon grid");
-        assert!(
-            grid_after.top() < grid_before.top(),
-            "grid: {grid_before:?} -> {grid_after:?}, popup: {popup_before:?} -> {popup_after:?}, auto-detect: {auto_detect_before:?} -> {auto_detect_after:?}"
-        );
-        assert_eq!(popup_after.top(), popup_before.top());
-        assert_eq!(auto_detect_after.top(), auto_detect_before.top());
+            .expect("auto-detect action should render below the icon grid");
+        assert!(grid_after.size.height > grid_before.size.height);
+        assert!(popup_after.size.height > popup_before.size.height);
+        assert!(auto_detect_after.top() > auto_detect_before.top());
+        assert!(popup_after.bottom() >= auto_detect_after.bottom());
     }
 
     #[gpui::test]
