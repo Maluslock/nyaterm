@@ -28,7 +28,7 @@ pub const LOG_FILE_SUFFIX: &str = "jsonl";
 /// Hand-built test packages and the official release share a version number and
 /// a product name, so the startup record carries an explicit tag: it is the only
 /// reliable way to tell from a user's log which build was actually running.
-pub const BUILD_TAG: &str = "tmux-cc-test-2026-09-28";
+pub const BUILD_TAG: &str = "tmux-cc-test-2026-09-29";
 
 const DEFAULT_RETENTION_DAYS: u32 = 7;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(30);
