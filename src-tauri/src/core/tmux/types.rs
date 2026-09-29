@@ -96,6 +96,20 @@ pub struct TmuxWindow {
     pub panes: Vec<TmuxPane>,
 }
 
+/// A status-line message tmux showed to the control-mode client.
+///
+/// Control mode reports these as `%message` instead of drawing a status line, so
+/// they are the only feedback for commands that succeed quietly or complain
+/// without failing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TmuxGatewayMessage {
+    pub text: String,
+    /// Monotonic per-connection counter: two identical messages still differ, so
+    /// the UI can tell a repeat apart from the one already on screen.
+    pub sequence: u64,
+}
+
 /// Full gateway state pushed to the frontend on every structural change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +126,9 @@ pub struct TmuxGatewaySnapshot {
     pub client_height: u16,
     /// Set once the session has detached or tmux exited.
     pub exited: bool,
+    /// Last `%message`, kept until a newer one replaces it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<TmuxGatewayMessage>,
 }
 
 impl Default for TmuxGatewaySnapshot {
@@ -124,6 +141,7 @@ impl Default for TmuxGatewaySnapshot {
             client_width: 80,
             client_height: 24,
             exited: false,
+            message: None,
         }
     }
 }

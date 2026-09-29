@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@/lib/invoke";
-import type { TmuxGatewaySnapshot, TmuxLayoutNode } from "@/lib/tmuxGateway";
+import {
+  TMUX_PANE_FIND_EVENT,
+  type TmuxGatewaySnapshot,
+  type TmuxLayoutNode,
+} from "@/lib/tmuxGateway";
 import { TmuxGatewayView } from "./TmuxGatewayView";
 
 const eventHandlers = vi.hoisted(
@@ -34,7 +38,10 @@ vi.mock("./TmuxPaneTerminal", () => ({
   }: {
     pane: { id?: string; index: number };
     onCellMetrics: (metrics: { cellWidth: number; cellHeight: number }) => void;
-    onContextMenu?: (paneId: string | undefined, point: { x: number; y: number }) => void;
+    onContextMenu?: (
+      paneId: string | undefined,
+      point: { x: number; y: number },
+    ) => void;
   }) => {
     // Stand in for the cell metrics a real xterm reports, so divider drags can
     // be translated into cell counts, and for the right-click the real terminal
@@ -74,7 +81,14 @@ const nestedLayout: TmuxLayoutNode = {
   x: 0,
   y: 0,
   children: [
-    { kind: "leaf", width: 40, height: 24, x: 0, y: 0, pane: paneAt(0, 0, 0, 40, 24) },
+    {
+      kind: "leaf",
+      width: 40,
+      height: 24,
+      x: 0,
+      y: 0,
+      pane: paneAt(0, 0, 0, 40, 24),
+    },
     {
       kind: "split",
       direction: "rows",
@@ -83,8 +97,22 @@ const nestedLayout: TmuxLayoutNode = {
       x: 41,
       y: 0,
       children: [
-        { kind: "leaf", width: 39, height: 12, x: 41, y: 0, pane: paneAt(1, 41, 0, 39, 12) },
-        { kind: "leaf", width: 39, height: 11, x: 41, y: 13, pane: paneAt(2, 41, 13, 39, 11) },
+        {
+          kind: "leaf",
+          width: 39,
+          height: 12,
+          x: 41,
+          y: 0,
+          pane: paneAt(1, 41, 0, 39, 12),
+        },
+        {
+          kind: "leaf",
+          width: 39,
+          height: 11,
+          x: 41,
+          y: 13,
+          pane: paneAt(2, 41, 13, 39, 11),
+        },
       ],
     },
   ],
@@ -103,7 +131,14 @@ const snapshot: TmuxGatewaySnapshot = {
       index: 0,
       name: "editor",
       active: false,
-      layout: { kind: "leaf", width: 80, height: 24, x: 0, y: 0, pane: paneAt(9, 0, 0, 80, 24) },
+      layout: {
+        kind: "leaf",
+        width: 80,
+        height: 24,
+        x: 0,
+        y: 0,
+        pane: paneAt(9, 0, 0, 80, 24),
+      },
       panes: [paneAt(9, 0, 0, 80, 24)],
     },
     {
@@ -112,7 +147,11 @@ const snapshot: TmuxGatewaySnapshot = {
       name: "bash",
       active: true,
       layout: nestedLayout,
-      panes: [paneAt(0, 0, 0, 40, 24), paneAt(1, 41, 0, 39, 12), paneAt(2, 41, 13, 39, 11)],
+      panes: [
+        paneAt(0, 0, 0, 40, 24),
+        paneAt(1, 41, 0, 39, 12),
+        paneAt(2, 41, 13, 39, 11),
+      ],
     },
   ],
 };
@@ -145,9 +184,11 @@ describe("TmuxGatewayView", () => {
       <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
     );
 
-    const tabButtons = Array.from(
-      container.querySelectorAll("button"),
-    ).filter((button) => button.textContent?.includes("bash") || button.textContent?.includes("editor"));
+    const tabButtons = Array.from(container.querySelectorAll("button")).filter(
+      (button) =>
+        button.textContent?.includes("bash") ||
+        button.textContent?.includes("editor"),
+    );
 
     expect(tabButtons.map((button) => button.textContent)).toEqual([
       "0: editor",
@@ -156,7 +197,11 @@ describe("TmuxGatewayView", () => {
   });
 
   it("renders nothing when tmux has not reported any window yet", () => {
-    const empty: TmuxGatewaySnapshot = { ...snapshot, windows: [], activeWindowId: undefined };
+    const empty: TmuxGatewaySnapshot = {
+      ...snapshot,
+      windows: [],
+      activeWindowId: undefined,
+    };
     const { container } = render(
       <TmuxGatewayView sessionId="s1" snapshot={empty} />,
     );
@@ -242,7 +287,9 @@ describe("TmuxGatewayView", () => {
   it("offers a detach button in the window strip", () => {
     const mockedInvoke = vi.mocked(invoke);
     mockedInvoke.mockClear();
-    const { getByLabelText } = render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+    const { getByLabelText } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
 
     fireEvent.click(getByLabelText("tmux.detach"));
 
@@ -328,7 +375,10 @@ describe("TmuxGatewayView", () => {
     fireEvent.keyDown(window, { key: "b", ctrlKey: true });
     // WebKit reports composition keydowns with the legacy "Process" value, and a
     // CJK IME sends the full-width colon with them.
-    fireEvent.keyDown(window, { key: "Process", isComposing: true } as KeyboardEventInit);
+    fireEvent.keyDown(window, {
+      key: "Process",
+      isComposing: true,
+    } as KeyboardEventInit);
 
     expect(mockedInvoke).not.toHaveBeenCalled();
     expect(screen.queryByPlaceholderText("tmux.commandPlaceholder")).toBeNull();
@@ -382,10 +432,7 @@ describe("TmuxGatewayView", () => {
     mockedInvoke.mockClear();
     const zoomed: TmuxGatewaySnapshot = {
       ...snapshot,
-      windows: [
-        snapshot.windows[0],
-        { ...snapshot.windows[1], zoomed: true },
-      ],
+      windows: [snapshot.windows[0], { ...snapshot.windows[1], zoomed: true }],
     };
     const { getByLabelText, rerender } = render(
       <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
@@ -398,7 +445,9 @@ describe("TmuxGatewayView", () => {
     });
 
     rerender(<TmuxGatewayView sessionId="s1" snapshot={zoomed} />);
-    expect(getByLabelText("tmux.zoomPane").getAttribute("aria-pressed")).toBe("true");
+    expect(getByLabelText("tmux.zoomPane").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
   it("applies a layout from the strip", () => {
@@ -408,7 +457,9 @@ describe("TmuxGatewayView", () => {
       <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
     );
 
-    fireEvent.change(getByLabelText("tmux.layout"), { target: { value: "tiled" } });
+    fireEvent.change(getByLabelText("tmux.layout"), {
+      target: { value: "tiled" },
+    });
 
     expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
       sessionId: "s1",
@@ -452,7 +503,9 @@ describe("TmuxGatewayView", () => {
 
     fireEvent.keyDown(window, { key: "b", ctrlKey: true });
     fireEvent.keyDown(window, { key: ":" });
-    fireEvent.click(screen.getByRole("button", { name: "capture-pane -p -S -200" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "capture-pane -p -S -200" }),
+    );
 
     const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
     expect((input as HTMLInputElement).value).toBe("capture-pane -p -S -200");
@@ -525,6 +578,56 @@ describe("TmuxGatewayView", () => {
 
     expect(queryByRole("menu")).toBeNull();
   });
+  it("shows tmux status-line messages and offers find from the pane menu", () => {
+    const { rerender, queryByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+    expect(queryByRole("status")).toBeNull();
+
+    rerender(
+      <TmuxGatewayView
+        sessionId="s1"
+        snapshot={{
+          ...snapshot,
+          message: { text: "no next window", sequence: 1 },
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("no next window");
+
+    // A repeated message is a new message: the sequence number moves.
+    rerender(
+      <TmuxGatewayView
+        sessionId="s1"
+        snapshot={{
+          ...snapshot,
+          message: { text: "no next window", sequence: 2 },
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("no next window");
+  });
+
+  it("asks the pane under the menu to open its find bar", () => {
+    const { getByTestId, getByRole, queryByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+    const seen: string[] = [];
+    const onFind = (event: Event) => {
+      const detail = (event as CustomEvent<{ paneId?: string }>).detail;
+      seen.push(detail.paneId ?? "");
+    };
+    window.addEventListener(TMUX_PANE_FIND_EVENT, onFind);
+
+    fireEvent.contextMenu(getByTestId("pane-%0"), { clientX: 10, clientY: 10 });
+    fireEvent.click(getByRole("menuitem", { name: "terminalCtx.find" }));
+
+    window.removeEventListener(TMUX_PANE_FIND_EVENT, onFind);
+    expect(seen).toEqual(["%0"]);
+    // The menu closes behind the request.
+    expect(queryByRole("menu")).toBeNull();
+  });
+
   it("emulates tmux's own zoom and kill-pane bindings", () => {
     const mockedInvoke = vi.mocked(invoke);
     mockedInvoke.mockClear();

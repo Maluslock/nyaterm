@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::layout::{apply_pane_ids, mark_active, parse_layout};
 use super::protocol::{parse_line, unescape_output, TmuxNotification};
-use super::types::{TmuxGatewaySnapshot, TmuxWindow};
+use super::types::{TmuxGatewayMessage, TmuxGatewaySnapshot, TmuxWindow};
 use crate::core::recording::{InputOrigin, InputSensitivity};
 use crate::core::session::{SessionCommand, SessionCommandSender};
 
@@ -126,6 +126,8 @@ struct Inner {
     reply: Option<ReplyCapture>,
     /// Finished command responses, drained by `filter`.
     replies: Vec<TmuxCommandResponse>,
+    /// Increments per `%message` so the UI can spot a repeated message.
+    message_sequence: u64,
 }
 
 /// Response lines collected for one UI command.
@@ -730,6 +732,12 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
         // `%message` is a user-visible tmux message, not response payload.
         TmuxNotification::Message { text } => {
             tracing::debug!(message = %text, "tmux gateway message");
+            inner.message_sequence += 1;
+            inner.snapshot.message = Some(TmuxGatewayMessage {
+                text,
+                sequence: inner.message_sequence,
+            });
+            inner.mark_state_dirty();
         }
         TmuxNotification::UnlinkedWindowAdd { .. }
         | TmuxNotification::PaneModeChanged { .. }
@@ -1126,6 +1134,35 @@ mod tests {
             inner.replies[1].error.as_deref(),
             Some("parse error: usage: list-sessions")
         );
+    }
+
+    #[test]
+    fn messages_from_tmux_become_visible_state() {
+        let mut inner = Inner::default();
+
+        apply(
+            &mut inner,
+            TmuxNotification::Message {
+                text: "no next window".to_string(),
+            },
+        );
+
+        let first_sequence = {
+            let message = inner.snapshot.message.as_ref().expect("a message");
+            assert_eq!(message.text, "no next window");
+            message.sequence
+        };
+        assert!(inner.state_dirty, "a message must reach the UI");
+
+        // The same text twice is still two distinct messages for the UI.
+        apply(
+            &mut inner,
+            TmuxNotification::Message {
+                text: "no next window".to_string(),
+            },
+        );
+        let second = inner.snapshot.message.as_ref().expect("a message");
+        assert!(second.sequence > first_sequence);
     }
 
     #[test]

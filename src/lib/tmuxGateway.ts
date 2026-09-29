@@ -62,6 +62,19 @@ export interface TmuxGatewaySnapshot {
   clientWidth: number;
   clientHeight: number;
   exited: boolean;
+  /**
+   * Last status-line message tmux showed the control client (`%message`).
+   *
+   * Control mode draws no status line, so this is where tmux's own feedback —
+   * "no next window", a binding's report, a refused resize — arrives.
+   */
+  message?: TmuxGatewayMessage;
+}
+
+export interface TmuxGatewayMessage {
+  text: string;
+  /** Bumped per message, so an identical repeat still counts as new. */
+  sequence: number;
 }
 
 export interface TmuxPaneOutput {

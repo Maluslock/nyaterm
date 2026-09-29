@@ -102,7 +102,9 @@ vi.mock("@/context/ThemeContext", () => {
 });
 
 // Unrelated to finding text, and heavy in jsdom.
-vi.mock("@/hooks/useKeywordHighlighter", () => ({ useKeywordHighlighter: vi.fn() }));
+vi.mock("@/hooks/useKeywordHighlighter", () => ({
+  useKeywordHighlighter: vi.fn(),
+}));
 vi.mock("@/hooks/useCommandHistory", () => {
   const result = {
     suggestions: [],
@@ -122,12 +124,19 @@ const pane: TmuxPane = {
   id: "%0",
   width: 80,
   height: 24,
+  x: 0,
+  y: 0,
   active: true,
 };
 
 function renderPane() {
   return render(
-    <TmuxPaneTerminal sessionId="session-1" pane={pane} isActive onSelect={vi.fn()} />,
+    <TmuxPaneTerminal
+      sessionId="session-1"
+      pane={pane}
+      isActive
+      onSelect={vi.fn()}
+    />,
   );
 }
 
@@ -173,7 +182,12 @@ describe("TmuxPaneTerminal find", () => {
     pressFind();
     await screen.findByPlaceholderText("terminalCtx.find");
 
-    const { handled } = pressFind({ key: "Escape", code: "Escape", ctrlKey: false, shiftKey: false });
+    const { handled } = pressFind({
+      key: "Escape",
+      code: "Escape",
+      ctrlKey: false,
+      shiftKey: false,
+    });
     expect(handled).toBe(false);
     expect(screen.queryByPlaceholderText("terminalCtx.find")).toBeNull();
   });

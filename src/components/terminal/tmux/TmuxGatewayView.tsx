@@ -261,6 +261,9 @@ const COMMAND_PRESETS = [
  */
 let dividerDragActive = false;
 
+/** How long a tmux status-line message stays on screen. */
+const TMUX_NOTICE_TTL_MS = 6000;
+
 /** Recently submitted command lines, newest last (module scope: survives remounts). */
 const commandHistory: string[] = [];
 const COMMAND_HISTORY_LIMIT = 50;
@@ -375,6 +378,18 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     id: string;
     name: string;
   } | null>(null);
+
+  // tmux's own status-line messages (`%message`), shown like a status line for
+  // a few seconds. The sequence number is what makes a repeated message new.
+  const [notice, setNotice] = useState<string | null>(null);
+  const messageSequence = snapshot.message?.sequence ?? null;
+  const messageText = snapshot.message?.text ?? null;
+  useEffect(() => {
+    if (messageSequence === null || messageText === null) return;
+    setNotice(messageText);
+    const timer = window.setTimeout(() => setNotice(null), TMUX_NOTICE_TTL_MS);
+    return () => window.clearTimeout(timer);
+  }, [messageSequence, messageText]);
 
   const submitRename = useCallback(() => {
     const target = renamingWindow;
@@ -785,7 +800,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   return (
     <div className="flex h-full w-full min-h-0 flex-col bg-[var(--df-bg-terminal)]">
       {/* Panes fill the space; the window strip sits below them. */}
-      <div ref={containerRef} className="min-h-0 flex-1">
+      <div ref={containerRef} className="relative min-h-0 flex-1">
         {activeWindow?.layout ? (
           <LayoutNodeView
             node={activeWindow.layout}
@@ -804,6 +819,11 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
               : null}
           </div>
         )}
+        {notice ? (
+          <output className="pointer-events-none absolute right-2 bottom-1 z-30 block max-w-[80%] truncate rounded border border-[var(--df-border)] bg-[var(--df-bg-panel)] px-2 py-1 text-xs text-[var(--df-text)] shadow-lg">
+            {notice}
+          </output>
+        ) : null}
         {paneMenu ? (
           <div
             role="menu"
