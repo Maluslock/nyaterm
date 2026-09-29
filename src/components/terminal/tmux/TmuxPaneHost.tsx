@@ -38,8 +38,9 @@ export function TmuxPaneHost({ sessionId, children }: TmuxPaneHostProps) {
     wasShowingTmux.current = false;
     const surface = plainSurfaceRef.current;
     const input =
-      surface?.querySelector<HTMLTextAreaElement>("textarea.xterm-helper-textarea") ??
-      surface?.querySelector<HTMLTextAreaElement>("textarea");
+      surface?.querySelector<HTMLTextAreaElement>(
+        "textarea.xterm-helper-textarea",
+      ) ?? surface?.querySelector<HTMLTextAreaElement>("textarea");
     input?.focus();
   }, [showTmux]);
 

@@ -2967,6 +2967,12 @@
     "waitingForLayout": "正在等待 tmux 佈局…",
     "windowActivity": "有新輸出",
     "windowBell": "鈴聲",
+    "windowList": "視窗與窗格",
+    "windowListActive": "目前",
+    "windowListHint": "↑/↓ 選擇，Enter 切換，Esc 關閉",
+    "windowListOpen": "視窗 / 窗格清單",
+    "windowListPanes": "個窗格",
+    "windowZoomed": "已縮放",
     "zoomPane": "放大 / 還原 pane"
   },
   "translation": {

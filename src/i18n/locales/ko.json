@@ -2966,6 +2966,12 @@
     "waitingForLayout": "tmux 레이아웃 대기 중…",
     "windowActivity": "새 출력",
     "windowBell": "벨",
+    "windowList": "창과 창분할",
+    "windowListActive": "현재",
+    "windowListHint": "↑/↓ 선택, Enter 전환, Esc 닫기",
+    "windowListOpen": "창 / 창분할 목록",
+    "windowListPanes": "개 창분할",
+    "windowZoomed": "확대됨",
     "zoomPane": "pane 확대/복원"
   },
   "translation": {

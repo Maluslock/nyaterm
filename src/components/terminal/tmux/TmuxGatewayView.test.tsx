@@ -608,6 +608,25 @@ describe("TmuxGatewayView", () => {
     expect(screen.getByRole("status").textContent).toBe("no next window");
   });
 
+  it("opens the window list from the prefix and from the strip", () => {
+    const { getByTitle, queryByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "w" });
+    expect(
+      screen.getByRole("dialog", { name: "tmux.windowList" }),
+    ).toBeTruthy();
+
+    // Escape belongs to the list while it is open.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(getByTitle("tmux.windowListOpen"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("asks the pane under the menu to open its find bar", () => {
     const { getByTestId, getByRole, queryByRole } = render(
       <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,

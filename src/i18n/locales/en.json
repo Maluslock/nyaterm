@@ -2974,6 +2974,12 @@
     "waitingForLayout": "Waiting for tmux layout…",
     "windowActivity": "New output",
     "windowBell": "Bell",
+    "windowList": "Windows and panes",
+    "windowListActive": "active",
+    "windowListHint": "↑/↓ choose, Enter switch, Esc close",
+    "windowListOpen": "List windows and panes",
+    "windowListPanes": "panes",
+    "windowZoomed": "zoomed",
     "zoomPane": "Zoom pane"
   },
   "translation": {

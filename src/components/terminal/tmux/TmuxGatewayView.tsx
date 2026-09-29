@@ -15,6 +15,7 @@ import {
   CircleDot,
   Columns2,
   LogOut,
+  List,
   Maximize2,
   Plus,
   Rows2,
@@ -51,6 +52,7 @@ import {
   resizeCommand,
 } from "@/lib/tmuxPaneResize";
 import { TmuxPaneTerminal, type TmuxPaneCellMetrics } from "./TmuxPaneTerminal";
+import { TmuxWindowList } from "./TmuxWindowList";
 
 interface TmuxGatewayViewProps {
   sessionId: string;
@@ -379,6 +381,9 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     name: string;
   } | null>(null);
 
+  // `choose-tree`-style list, opened with the emulated `Ctrl-b w`.
+  const [windowListOpen, setWindowListOpen] = useState(false);
+
   // tmux's own status-line messages (`%message`), shown like a status line for
   // a few seconds. The sequence number is what makes a repeated message new.
   const [notice, setNotice] = useState<string | null>(null);
@@ -533,6 +538,11 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
         // form, so accept all three.
         if (event.key === ":" || event.key === ";" || event.key === "：") {
           setCommandLine((current) => current ?? "");
+          return;
+        }
+        // `Ctrl-b w` is tmux's window list; ours needs no server round trip.
+        if (event.key === "w") {
+          setWindowListOpen(true);
           return;
         }
         const command = prefixCommands[event.key];
@@ -787,6 +797,15 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       </button>
       <button
         type="button"
+        aria-label={t("tmux.windowListOpen")}
+        title={t("tmux.windowListOpen")}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
+        onClick={() => setWindowListOpen(true)}
+      >
+        <List className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
         aria-label={t("tmux.commandLine")}
         title={t("tmux.commandLine")}
         className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
@@ -819,6 +838,17 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
               : null}
           </div>
         )}
+        {windowListOpen ? (
+          <TmuxWindowList
+            snapshot={snapshot}
+            onSelectWindow={(windowId) => send(`select-window -t ${windowId}`)}
+            onSelectPane={(windowId, paneId) => {
+              send(`select-window -t ${windowId}`);
+              send(`select-pane -t ${paneId}`);
+            }}
+            onClose={() => setWindowListOpen(false)}
+          />
+        ) : null}
         {notice ? (
           <output className="pointer-events-none absolute right-2 bottom-1 z-30 block max-w-[80%] truncate rounded border border-[var(--df-border)] bg-[var(--df-bg-panel)] px-2 py-1 text-xs text-[var(--df-text)] shadow-lg">
             {notice}

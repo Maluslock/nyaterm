@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TmuxGatewaySnapshot } from "@/lib/tmuxGateway";
 import { TmuxPaneHost } from "./TmuxPaneHost";
 
-const gateway = vi.hoisted(() => ({ snapshot: null as TmuxGatewaySnapshot | null }));
+const gateway = vi.hoisted(() => ({
+  snapshot: null as TmuxGatewaySnapshot | null,
+}));
 
 vi.mock("@/hooks/useTmuxGateway", () => ({
   useTmuxGateway: () => gateway.snapshot,
@@ -13,7 +15,9 @@ vi.mock("./TmuxGatewayView", () => ({
   TmuxGatewayView: () => <div data-testid="tmux-view" />,
 }));
 
-const snapshot = (overrides: Partial<TmuxGatewaySnapshot>): TmuxGatewaySnapshot => ({
+const snapshot = (
+  overrides: Partial<TmuxGatewaySnapshot>,
+): TmuxGatewaySnapshot => ({
   sessionName: "itest",
   windows: [],
   clientWidth: 80,
@@ -77,7 +81,10 @@ describe("TmuxPaneHost", () => {
 
     const { rerender } = render(
       <TmuxPaneHost sessionId="s1">
-        <textarea className="xterm-helper-textarea" data-testid="terminal-input" />
+        <textarea
+          className="xterm-helper-textarea"
+          data-testid="terminal-input"
+        />
       </TmuxPaneHost>,
     );
     expect(screen.queryByTestId("tmux-view")).toBeTruthy();
@@ -85,7 +92,10 @@ describe("TmuxPaneHost", () => {
     gateway.snapshot = snapshot({ exited: true });
     rerender(
       <TmuxPaneHost sessionId="s1">
-        <textarea className="xterm-helper-textarea" data-testid="terminal-input" />
+        <textarea
+          className="xterm-helper-textarea"
+          data-testid="terminal-input"
+        />
       </TmuxPaneHost>,
     );
 

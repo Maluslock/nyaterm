@@ -2972,6 +2972,12 @@
     "waitingForLayout": "正在等待 tmux 布局…",
     "windowActivity": "有新输出",
     "windowBell": "响铃",
+    "windowList": "窗口与窗格",
+    "windowListActive": "当前",
+    "windowListHint": "↑/↓ 选择，Enter 切换，Esc 关闭",
+    "windowListOpen": "窗口 / 窗格列表",
+    "windowListPanes": "个窗格",
+    "windowZoomed": "已缩放",
     "zoomPane": "放大 / 还原 pane"
   },
   "translation": {
