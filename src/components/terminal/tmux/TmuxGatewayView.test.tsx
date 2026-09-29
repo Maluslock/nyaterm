@@ -230,12 +230,12 @@ describe("TmuxGatewayView", () => {
     render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
 
     fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-    fireEvent.keyDown(window, { key: "z" });
+    fireEvent.keyDown(window, { key: "q" });
 
     expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_input", {
       sessionId: "s1",
       paneId: "%2",
-      data: "\u0002z",
+      data: "\u0002q",
     });
   });
 
@@ -524,5 +524,25 @@ describe("TmuxGatewayView", () => {
     fireEvent.click(getByRole("menuitem", { name: "tmux.killPane" }));
 
     expect(queryByRole("menu")).toBeNull();
+  });
+  it("emulates tmux's own zoom and kill-pane bindings", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "z" });
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -Z",
+    });
+
+    mockedInvoke.mockClear();
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "x" });
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "kill-pane",
+    });
   });
 });

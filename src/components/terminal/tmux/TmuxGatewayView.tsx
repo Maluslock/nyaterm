@@ -439,6 +439,8 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
           p: "previous-window",
           "%": "split-window -h",
           '"': "split-window -v",
+          z: "resize-pane -Z",
+          x: "kill-pane",
           "[": "copy-mode",
         };
         // ":" is Shift+";" on most layouts, toolkit-synthesised events can
