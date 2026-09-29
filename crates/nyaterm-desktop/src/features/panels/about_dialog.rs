@@ -55,7 +55,7 @@ impl NyaTermApp {
 
     fn about_dialog_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.theme_palette();
-        let mut support_info = format!(
+        let support_info = format!(
             "NyaTerm {}\nOS: {}\nArchitecture: {}\nMode: {:?}",
             env!("CARGO_PKG_VERSION"),
             std::env::consts::OS,
@@ -66,7 +66,7 @@ impl NyaTermApp {
             RuntimeMode::Portable => t!("about.portable"),
             RuntimeMode::Installed => t!("about.installed"),
         };
-        let mut support_rows = vec![
+        let support_rows = vec![
             (t!("about.version"), env!("CARGO_PKG_VERSION").to_string()),
             (
                 t!("about.operatingSystem"),
@@ -76,11 +76,14 @@ impl NyaTermApp {
             (t!("about.runtime"), runtime_label.to_string()),
         ];
         #[cfg(windows)]
-        {
+        let (support_info, support_rows) = {
+            let mut support_info = support_info;
+            let mut support_rows = support_rows;
             let display = conpty_display();
             support_info.push_str(&format!("\nLocal Terminal ConPTY: {display}"));
             support_rows.push((t!("about.conpty"), display));
-        }
+            (support_info, support_rows)
+        };
         div()
             .id("about-dialog-content")
             .debug_selector(|| "about-dialog-content".to_string())
