@@ -797,6 +797,9 @@ impl NyaTermApp {
         }
         // Charset-encode paste/typed text; pure ASCII CSI/mouse reports pass through.
         let disposition = terminal_wire_write_disposition(TerminalWireWriteKind::LogicalInput);
+        let terminal_line = (bytes == b"\r" || bytes == b"\n")
+            .then(|| self.read_terminal_input_line_for_session(session_id))
+            .flatten();
         let encoded = if disposition.encode_session_charset {
             self.encode_session_outgoing(session_id, bytes)
         } else {
@@ -812,6 +815,10 @@ impl NyaTermApp {
             return Err(error);
         }
         if disposition.record_logical_input {
+            if let Some(line) = terminal_line {
+                self.recording
+                    .resync_input_line(session_id.to_string(), line);
+            }
             self.recording
                 .write_input(session_id.to_string(), bytes.to_vec());
         }

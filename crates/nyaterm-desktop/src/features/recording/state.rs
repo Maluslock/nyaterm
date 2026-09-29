@@ -152,6 +152,14 @@ impl RecordingFeatureState {
         self.pipeline.write_input(session_id, data);
     }
 
+    pub(in crate::features) fn resync_input_line(
+        &self,
+        session_id: impl Into<String>,
+        line: String,
+    ) {
+        self.pipeline.resync_input_line(session_id, line);
+    }
+
     pub(in crate::features) fn write_raw_input(
         &self,
         session_id: impl Into<String>,

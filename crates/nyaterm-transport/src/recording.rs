@@ -1,3 +1,4 @@
+use nyaterm_core::terminal::input_tracker::{TerminalInputState, resync_from_terminal_line};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -298,6 +299,8 @@ struct SessionCaptureState {
     memory_limit_bytes: usize,
     pending_input_escape: Option<TerminalInputEscapeState>,
     input_buffer: String,
+    input_needs_terminal_resync: bool,
+    input_before_tab: Option<String>,
     output_buffer: String,
     live_echo_buffer: String,
     submitted_line_echo: Option<String>,
@@ -317,6 +320,8 @@ impl SessionCaptureState {
             memory_limit_bytes,
             pending_input_escape: None,
             input_buffer: String::new(),
+            input_needs_terminal_resync: false,
+            input_before_tab: None,
             output_buffer: String::new(),
             live_echo_buffer: String::new(),
             submitted_line_echo: None,
@@ -410,8 +415,10 @@ impl SessionCaptureState {
                     index += 1;
                 }
                 b'\t' => {
-                    self.input_buffer.push('\t');
-                    self.live_echo_buffer.push('\t');
+                    if !self.input_needs_terminal_resync {
+                        self.input_before_tab = Some(self.input_buffer.clone());
+                    }
+                    self.input_needs_terminal_resync = true;
                     index += 1;
                 }
                 b'\x1b' => {
@@ -472,6 +479,27 @@ impl SessionCaptureState {
         self.commit_partial_input();
         self.flush_output_lines(true);
         self.append_record("RAW_INPUT", format_raw_input_bytes(data));
+    }
+
+    fn resync_input_line(&mut self, terminal_line: &str) {
+        if !self.input_needs_terminal_resync {
+            return;
+        }
+        let current = TerminalInputState {
+            value: self
+                .input_before_tab
+                .as_ref()
+                .unwrap_or(&self.input_buffer)
+                .clone(),
+            ..TerminalInputState::new()
+        };
+        if let Some(recovered) = resync_from_terminal_line(&current, terminal_line) {
+            self.input_buffer = recovered.value;
+            self.live_echo_buffer.clear();
+            self.output_buffer.clear();
+            self.input_needs_terminal_resync = false;
+            self.input_before_tab = None;
+        }
     }
 
     fn write_output(&mut self, data: &str) {
@@ -581,6 +609,8 @@ impl SessionCaptureState {
     fn commit_input_line(&mut self) {
         self.flush_output_lines(true);
         let line = mem::take(&mut self.input_buffer);
+        self.input_needs_terminal_resync = false;
+        self.input_before_tab = None;
         self.live_echo_buffer.clear();
 
         if line.trim().is_empty() {
@@ -595,6 +625,8 @@ impl SessionCaptureState {
     fn commit_partial_input(&mut self) {
         self.flush_output_lines(true);
         let line = mem::take(&mut self.input_buffer);
+        self.input_needs_terminal_resync = false;
+        self.input_before_tab = None;
         self.live_echo_buffer.clear();
         self.submitted_line_echo = None;
 
@@ -897,6 +929,13 @@ impl RecordingManager {
             .or_insert_with(|| SessionCaptureState::new(memory_limit_bytes));
         state.set_memory_limit(memory_limit_bytes);
         state.write_input(data);
+    }
+
+    pub fn resync_input_line(&self, session_id: &str, terminal_line: &str) {
+        let mut sessions = lock_recover(&self.sessions);
+        if let Some(state) = sessions.get_mut(session_id) {
+            state.resync_input_line(terminal_line);
+        }
     }
 
     pub fn write_raw_input(&self, session_id: &str, data: &[u8]) {
@@ -1752,6 +1791,77 @@ mod tests {
     }
 
     #[test]
+    fn tab_completion_uses_terminal_line_and_drops_partial_repaint() {
+        let manager = RecordingManager::new();
+        let path = unique_path("tab-completion");
+        manager.write_input("s1", b"vi ins");
+        manager.write_input("s1", b"\t");
+        manager.write_output("s1", "\r\x1b[2Kvi install-node-exporter.sh");
+        manager.resync_input_line("s1", "[root@rocky9 ~]# vi install-node-exporter.sh");
+        manager.write_input("s1", b"\r");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[INPUT] vi install-node-exporter.sh\n"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn tab_completion_keeps_complete_candidate_lines() {
+        let manager = RecordingManager::new();
+        let path = unique_path("tab-candidates");
+        manager.write_input("s1", b"vi ins");
+        manager.write_input("s1", b"\t\t");
+        manager.write_output("s1", "install-a\ninstall-b\n[root@rocky9 ~]# vi install-");
+        manager.resync_input_line("s1", "[root@rocky9 ~]# vi install-");
+        manager.write_input("s1", b"node-exporter.sh\r");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[OUTPUT] install-a\n[OUTPUT] install-b\n[INPUT] vi install-node-exporter.sh\n"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn tab_completion_recovers_when_more_text_is_typed_before_enter() {
+        let manager = RecordingManager::new();
+        let path = unique_path("tab-continued-input");
+        manager.write_input("s1", b"vi ins\t");
+        manager.write_output("s1", "\r\x1b[2Kvi install-node-exporter.sh");
+        manager.write_input("s1", b".bak");
+        manager.resync_input_line("s1", "[root@rocky9 ~]# vi install-node-exporter.sh.bak");
+        manager.write_input("s1", b"\r");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[INPUT] vi install-node-exporter.sh.bak\n"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resync_without_tab_preserves_manual_input_and_backspace() {
+        let manager = RecordingManager::new();
+        let path = unique_path("manual-input");
+        manager.write_input("s1", b"vi nginx_cp.confx\x7f");
+        manager.write_input("s1", b"\x1b[D");
+        manager.resync_input_line("s1", "unrelated screen line");
+        manager.write_input("s1", b"\r");
+        manager.save_transcript("s1", &path, true, false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[INPUT] vi nginx_cp.conf\n"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn raw_input_records_exact_bytes_as_hex() {
         let manager = RecordingManager::new();
         let path = unique_path("raw-input");
@@ -1776,6 +1886,49 @@ mod tests {
 
         let _ = fs::remove_file(path);
         let _ = fs::remove_file(transcript_path);
+    }
+
+    #[test]
+    fn raw_recording_keeps_tab_and_terminal_bytes_unchanged() {
+        let manager = RecordingManager::new();
+        let path = std::path::PathBuf::from(unique_path("raw-tab"));
+        let profile = super::RecordingProfile {
+            mode: super::RecordingMode::Raw,
+            base_path: path.parent().unwrap().to_path_buf(),
+            path_template: path.file_name().unwrap().to_string_lossy().to_string(),
+            include_timestamps: false,
+            include_io_labels: false,
+            include_session_metadata: false,
+            rotation: super::RecordingRotationPolicy::Session,
+            existing_file_behavior: super::ExistingFileBehavior::Overwrite,
+            include_binary_transfer_payloads: false,
+        };
+        let context = super::RecordingContext {
+            session_id: "s1".to_string(),
+            session_name: "session".to_string(),
+            connection_id: None,
+            connection_name: None,
+            group_path: None,
+            protocol: "terminal".to_string(),
+            host: None,
+            port: None,
+            username: None,
+            started_at: time::OffsetDateTime::now_utc(),
+        };
+        manager
+            .start_with_profile("s1", context, profile, Some(path.clone()))
+            .unwrap();
+        manager.write_raw_input("s1", b"vi ins\t");
+        manager.write_output("s1", "\r\x1b[2Kvi install-node-exporter.sh");
+        manager.resync_input_line("s1", "[root@rocky9 ~]# vi install-node-exporter.sh");
+        manager.write_raw_input("s1", b"\r");
+        manager.stop("s1").unwrap();
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"vi ins\t\r\x1b[2Kvi install-node-exporter.sh\r"
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]

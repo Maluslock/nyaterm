@@ -83,6 +83,10 @@ impl RecordingWritePipeline {
         self.writer().write_input(session_id, data);
     }
 
+    pub(crate) fn resync_input_line(&self, session_id: impl Into<String>, line: String) {
+        self.writer().resync_input_line(session_id, line);
+    }
+
     pub(crate) fn write_raw_input(&self, session_id: impl Into<String>, data: impl Into<Vec<u8>>) {
         self.writer().write_raw_input(session_id, data);
     }
@@ -168,6 +172,18 @@ impl RecordingWriteHandle {
             RecordingWriteCommand::WriteInput {
                 session_id: session_id.clone(),
                 data,
+            },
+        );
+    }
+
+    pub(crate) fn resync_input_line(&self, session_id: impl Into<String>, line: String) {
+        let session_id = session_id.into();
+        self.enqueue_payload(
+            &session_id,
+            line.len(),
+            RecordingWriteCommand::ResyncInputLine {
+                session_id: session_id.clone(),
+                line,
             },
         );
     }
@@ -395,6 +411,10 @@ enum RecordingWriteCommand {
         session_id: String,
         data: Vec<u8>,
     },
+    ResyncInputLine {
+        session_id: String,
+        line: String,
+    },
     WriteRawInput {
         session_id: String,
         data: Vec<u8>,
@@ -547,6 +567,10 @@ fn run_recording_writer(
                     &session_id,
                     false,
                 );
+            }
+            RecordingWriteCommand::ResyncInputLine { session_id, line } => {
+                recording_manager.resync_input_line(&session_id, &line);
+                release_queued_bytes(&queued_bytes, line.len());
             }
             RecordingWriteCommand::WriteRawInput { session_id, data } => {
                 let payload_bytes = data.len();
@@ -727,6 +751,39 @@ mod tests {
             );
         }
         assert!(removed);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recording_pipeline_resyncs_tab_input_before_enter() {
+        let pipeline = RecordingWritePipeline::spawn(1024 * 1024);
+        let writer = pipeline.writer();
+        let session_id = "session-tab-resync";
+        let path = PathBuf::from(unique_recording_path("tab-resync"));
+        writer
+            .start(
+                session_id.to_string(),
+                recording_context(session_id),
+                recording_profile(&path),
+                Some(path.clone()),
+                1024 * 1024,
+            )
+            .expect("recording should start");
+        pipeline.write_input(session_id, b"vi ins\t".to_vec());
+        pipeline.write_output(session_id, "\r\x1b[2Kvi install-node-exporter.sh");
+        pipeline.resync_input_line(
+            session_id,
+            "[root@rocky9 ~]# vi install-node-exporter.sh".to_string(),
+        );
+        pipeline.write_input(session_id, b"\r".to_vec());
+        writer
+            .stop(session_id.to_string())
+            .expect("recording should stop");
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[INPUT] vi install-node-exporter.sh\n"
+        );
         let _ = fs::remove_file(path);
     }
 
