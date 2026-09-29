@@ -2954,6 +2954,7 @@
     "nextWindow": "다음 tmux 창",
     "previousWindow": "이전 tmux 창",
     "renameWindow": "창 이름 변경",
+    "resizePane": "드래그하여 pane 크기 조절",
     "waitingForLayout": "tmux 레이아웃 대기 중…",
     "windowActivity": "새 출력",
     "windowBell": "벨",

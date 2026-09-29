@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@/lib/invoke";
 import type { TmuxGatewaySnapshot, TmuxLayoutNode } from "@/lib/tmuxGateway";
@@ -26,9 +27,20 @@ vi.mock("@/lib/invoke", () => ({
 // A real xterm needs canvas/layout that jsdom does not provide; the view's job
 // is the split structure, so stand in for the terminal surface.
 vi.mock("./TmuxPaneTerminal", () => ({
-  TmuxPaneTerminal: ({ pane }: { pane: { id?: string; index: number } }) => (
-    <div data-testid={`pane-${pane.id ?? pane.index}`} />
-  ),
+  TmuxPaneTerminal: ({
+    pane,
+    onCellMetrics,
+  }: {
+    pane: { id?: string; index: number };
+    onCellMetrics: (metrics: { cellWidth: number; cellHeight: number }) => void;
+  }) => {
+    // Stand in for the cell metrics a real xterm reports, so divider drags can
+    // be translated into cell counts.
+    useEffect(() => {
+      onCellMetrics({ cellWidth: 8, cellHeight: 16 });
+    }, [onCellMetrics]);
+    return <div data-testid={`pane-${pane.id ?? pane.index}`} />;
+  },
 }));
 
 const paneAt = (index: number, x: number, y: number, w: number, h: number) => ({
@@ -390,6 +402,24 @@ describe("TmuxGatewayView", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
       sessionId: "s1",
       command: "select-layout tiled",
+    });
+  });
+  it("turns a divider drag into a resize-pane command", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getAllByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    const divider = getAllByRole("separator")[0];
+    fireEvent.pointerDown(divider, { clientX: 100, clientY: 40, pointerId: 1 });
+    // 32px right at 8px per cell = 4 cells on the pane left of the divider.
+    fireEvent.pointerMove(window, { clientX: 132, clientY: 40 });
+    fireEvent.pointerUp(window, { clientX: 132, clientY: 40 });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -t %0 -R 4",
     });
   });
 });

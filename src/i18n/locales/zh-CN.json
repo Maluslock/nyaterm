@@ -2960,6 +2960,7 @@
     "nextWindow": "下一个 tmux 窗口",
     "previousWindow": "上一个 tmux 窗口",
     "renameWindow": "重命名窗口",
+    "resizePane": "拖动调整该 pane 大小",
     "waitingForLayout": "正在等待 tmux 布局…",
     "windowActivity": "有新输出",
     "windowBell": "响铃",

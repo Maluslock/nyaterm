@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   collectLayoutPanes,
@@ -35,6 +35,7 @@ import {
   type TmuxWindow,
 } from "@/lib/tmuxGateway";
 import { logger } from "@/lib/logger";
+import { type SplitAxis, nextPaneResize } from "@/lib/tmuxPaneResize";
 import { TmuxPaneTerminal, type TmuxPaneCellMetrics } from "./TmuxPaneTerminal";
 
 interface TmuxGatewayViewProps {
@@ -48,6 +49,28 @@ interface LayoutNodeProps {
   activePaneId: string | null;
   onSelectPane: (paneId: string) => void;
   onCellMetrics: (metrics: TmuxPaneCellMetrics) => void;
+  /** Translate divider drag pixels into a tmux command; returns the new offset. */
+  onResizePane: (
+    paneId: string | undefined,
+    axis: SplitAxis,
+    deltaPx: number,
+    sentCells: number,
+  ) => number;
+}
+
+/** Pane at the given edge of a subtree — the one a divider drag resizes. */
+function edgePaneId(
+  node: TmuxLayoutNode,
+  edge: "right" | "bottom",
+): string | undefined {
+  const panes = collectLayoutPanes(node).filter((pane) => pane.id);
+  if (panes.length === 0) return undefined;
+  const offset = edge === "right" ? "x" : "y";
+  const size = edge === "right" ? "width" : "height";
+  const furthest = panes.reduce((best, pane) =>
+    pane[offset] + pane[size] > best[offset] + best[size] ? pane : best,
+  );
+  return furthest.id;
 }
 
 function LayoutNodeView({
@@ -56,7 +79,10 @@ function LayoutNodeView({
   activePaneId,
   onSelectPane,
   onCellMetrics,
+  onResizePane,
 }: LayoutNodeProps) {
+  const { t } = useTranslation();
+
   if (node.kind === "leaf") {
     return (
       <TmuxPaneTerminal
@@ -77,25 +103,57 @@ function LayoutNodeView({
       }`}
     >
       {node.children.map((child, index) => (
-        <div
-          // Layout children are positional; tmux reports geometry, not ids.
-          // biome-ignore lint/suspicious/noArrayIndexKey: positional by design
-          key={index}
-          className="min-h-0 min-w-0"
-          style={{
-            // tmux already decided the proportions; mirror them.
-            flexGrow: isColumns ? child.width : child.height,
-            flexBasis: 0,
-          }}
-        >
-          <LayoutNodeView
-            node={child}
-            sessionId={sessionId}
-            activePaneId={activePaneId}
-            onSelectPane={onSelectPane}
-            onCellMetrics={onCellMetrics}
-          />
-        </div>
+        // Layout children are positional; tmux reports geometry, not ids.
+        // biome-ignore lint/suspicious/noArrayIndexKey: positional by design
+        <Fragment key={index}>
+          {index > 0 ? (
+            <div
+              data-tmux-gutter
+              role="separator"
+              aria-orientation={isColumns ? "vertical" : "horizontal"}
+              aria-label={t("tmux.resizePane")}
+              className={`shrink-0 hover:bg-[var(--df-primary)] ${
+                isColumns ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
+              }`}
+              onPointerDown={(event) => {
+                const before = node.children[index - 1];
+                const paneId = edgePaneId(before, isColumns ? "right" : "bottom");
+                if (!paneId) return;
+                event.preventDefault();
+                const axis: SplitAxis = isColumns ? "columns" : "rows";
+                const start = isColumns ? event.clientX : event.clientY;
+                let sentCells = 0;
+                const onMove = (moveEvent: PointerEvent) => {
+                  const current = isColumns ? moveEvent.clientX : moveEvent.clientY;
+                  sentCells = onResizePane(paneId, axis, current - start, sentCells);
+                };
+                const onUp = () => {
+                  window.removeEventListener("pointermove", onMove);
+                  window.removeEventListener("pointerup", onUp);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+              }}
+            />
+          ) : null}
+          <div
+            className="min-h-0 min-w-0"
+            style={{
+              // tmux already decided the proportions; mirror them.
+              flexGrow: isColumns ? child.width : child.height,
+              flexBasis: 0,
+            }}
+          >
+            <LayoutNodeView
+              node={child}
+              sessionId={sessionId}
+              activePaneId={activePaneId}
+              onSelectPane={onSelectPane}
+              onCellMetrics={onCellMetrics}
+              onResizePane={onResizePane}
+            />
+          </div>
+        </Fragment>
       ))}
     </div>
   );
@@ -109,6 +167,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const handleCellMetrics = useCallback((metrics: TmuxPaneCellMetrics) => {
     cellMetricsRef.current = metrics;
   }, []);
+
 
   const activeWindow: TmuxWindow | null =
     snapshot.windows.find((window) => window.id === snapshot.activeWindowId) ??
@@ -132,6 +191,25 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       void runTmuxCommand(sessionId, command).catch(() => {});
     },
     [sessionId],
+  );
+
+  // Dragging a divider cannot resize locally — the layout mirrors tmux — so the
+  // drag is translated into `resize-pane` commands in cell units.
+  const handlePaneResize = useCallback(
+    (paneId: string | undefined, axis: SplitAxis, deltaPx: number, sentCells: number) => {
+      const metrics = cellMetricsRef.current;
+      const step = nextPaneResize({
+        paneId,
+        axis,
+        deltaPx,
+        cellWidth: metrics?.cellWidth ?? 0,
+        cellHeight: metrics?.cellHeight ?? 0,
+        sentCells,
+      });
+      if (step.command) send(step.command);
+      return step.sentCells;
+    },
+    [send],
   );
 
   // tmux command line: the only way to reach commands the strip has no button
@@ -511,6 +589,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
             activePaneId={activePaneId}
             onSelectPane={handleSelectPane}
             onCellMetrics={handleCellMetrics}
+            onResizePane={handlePaneResize}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-[var(--df-text-muted)]">

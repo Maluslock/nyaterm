@@ -2962,6 +2962,7 @@
     "nextWindow": "Next tmux window",
     "previousWindow": "Previous tmux window",
     "renameWindow": "Rename window",
+    "resizePane": "Drag to resize this pane",
     "waitingForLayout": "Waiting for tmux layout…",
     "windowActivity": "New output",
     "windowBell": "Bell",
