@@ -44,6 +44,12 @@ export interface TmuxWindow {
   index: number;
   name: string;
   active: boolean;
+  /** `#{window_zoomed_flag}`: the active pane fills the window. */
+  zoomed?: boolean;
+  /** `#{window_activity_flag}`: output arrived since the window was last seen. */
+  activity?: boolean;
+  /** `#{window_bell_flag}`: the window rang the bell. */
+  bell?: boolean;
   layout?: TmuxLayoutNode;
   panes: TmuxPane[];
 }

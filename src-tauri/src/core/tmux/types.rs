@@ -80,6 +80,16 @@ pub struct TmuxWindow {
     pub index: u32,
     pub name: String,
     pub active: bool,
+    /// `#{window_zoomed_flag}`: the active pane fills the window.
+    #[serde(default)]
+    pub zoomed: bool,
+    /// `#{window_activity_flag}`: the window produced output since it was last
+    /// looked at.
+    #[serde(default)]
+    pub activity: bool,
+    /// `#{window_bell_flag}`: the window rang the bell.
+    #[serde(default)]
+    pub bell: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layout: Option<TmuxLayoutNode>,
     #[serde(default)]

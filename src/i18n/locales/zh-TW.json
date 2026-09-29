@@ -2946,10 +2946,19 @@
     "commandPlaceholder": "輸入 tmux 命令，Enter 執行",
     "detach": "從 tmux 分離（回到終端）",
     "killWindow": "關閉 tmux 視窗",
+    "layout": "佈局",
+    "layoutEvenHorizontal": "均勻橫排",
+    "layoutEvenVertical": "均勻直排",
+    "layoutMainHorizontal": "主窗在上",
+    "layoutTiled": "平鋪",
     "newWindow": "新增 tmux 視窗",
     "nextWindow": "下一個 tmux 視窗",
     "previousWindow": "上一個 tmux 視窗",
-    "waitingForLayout": "正在等待 tmux 佈局…"
+    "renameWindow": "重新命名視窗",
+    "waitingForLayout": "正在等待 tmux 佈局…",
+    "windowActivity": "有新輸出",
+    "windowBell": "鈴聲",
+    "zoomPane": "放大 / 還原 pane"
   },
   "translation": {
     "ali": "阿里翻譯",

@@ -61,7 +61,7 @@ const CAPTURE_CLEAR: &str = "\x1b[2J\x1b[H";
 fn windows_command(target: Option<&str>) -> String {
     let target = target.map(|id| format!(" -t {id}")).unwrap_or_default();
     format!(
-        "list-windows{target} -F '{WINDOW_TAG}#{{window_id}}\t#{{window_index}}\t#{{window_name}}\t#{{window_active}}\t#{{window_layout}}'"
+        "list-windows{target} -F '{WINDOW_TAG}#{{window_id}}\t#{{window_index}}\t#{{window_name}}\t#{{window_active}}\t#{{window_zoomed_flag}}\t#{{window_activity_flag}}\t#{{window_bell_flag}}\t#{{window_layout}}'"
     )
 }
 
@@ -596,6 +596,9 @@ fn apply(inner: &mut Inner, notification: TmuxNotification) {
                     index,
                     name: String::new(),
                     active: false,
+                    zoomed: false,
+                    activity: false,
+                    bell: false,
                     layout: None,
                     panes: Vec::new(),
                 });
@@ -817,13 +820,17 @@ fn process_response_block(inner: &mut Inner, lines: &[String], is_error: bool) {
 
 fn apply_window_line(inner: &mut Inner, rest: &str) {
     let fields: Vec<&str> = rest.split('\t').collect();
-    if fields.len() < 5 {
+    if fields.len() < 8 {
         return;
     }
     let id = fields[0].to_string();
     let index = fields[1].parse().unwrap_or(0);
     let name = fields[2].to_string();
     let active = fields[3] == "1";
+    let zoomed = fields[4] == "1";
+    let activity = fields[5] == "1";
+    let bell = fields[6] == "1";
+    let layout_field = fields[7];
 
     if active {
         inner.snapshot.active_window_id = Some(id.clone());
@@ -832,7 +839,13 @@ fn apply_window_line(inner: &mut Inner, rest: &str) {
     let ids = inner.pane_ids.get(&id).cloned();
     let active_pane = inner.active_pane_number.get(&id).copied();
 
-    let mut layout = parse_layout(fields[4]).ok();
+    if let Some(window) = inner.find_window_mut(&id) {
+        window.zoomed = zoomed;
+        window.activity = activity;
+        window.bell = bell;
+    }
+
+    let mut layout = parse_layout(layout_field).ok();
     if let Some(node) = layout.as_mut() {
         if let Some(ids) = ids {
             apply_pane_ids(node, &ids);
@@ -861,6 +874,9 @@ fn apply_window_line(inner: &mut Inner, rest: &str) {
             index,
             name,
             active,
+            zoomed,
+            activity,
+            bell,
             layout,
             panes,
         }),
@@ -1038,7 +1054,7 @@ mod tests {
         process_response_block(
             &mut inner,
             &[
-                "NYATERM-WINDOW:@1\t0\tbash\t1\tb25e,80x24,0,0,1".to_string(),
+                "NYATERM-WINDOW:@1\t0\tbash\t1\t0\t0\t0\tb25e,80x24,0,0,1".to_string(),
             ],
             false,
         );
@@ -1065,6 +1081,23 @@ mod tests {
         );
 
         drop(command_rx);
+    }
+
+    #[test]
+    fn window_lines_carry_zoom_activity_and_bell_flags() {
+        let mut inner = Inner::default();
+        process_response_block(
+            &mut inner,
+            &["NYATERM-WINDOW:@2\t1\tbuild\t1\t1\t0\t1\tb25e,80x24,0,0,0".to_string()],
+            false,
+        );
+
+        let window = inner.snapshot.windows.first().expect("a window");
+        assert_eq!(window.name, "build");
+        assert!(window.zoomed, "zoomed flag should parse");
+        assert!(window.bell, "bell flag should parse");
+        assert!(!window.activity, "activity flag should parse");
+        assert!(window.layout.is_some(), "layout should still parse");
     }
 
     #[test]

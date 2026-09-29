@@ -319,4 +319,77 @@ describe("TmuxGatewayView", () => {
 
     expect(screen.getByPlaceholderText("tmux.commandPlaceholder")).toBeTruthy();
   });
+  it("marks windows with activity and bell flags", () => {
+    const flagged: TmuxGatewaySnapshot = {
+      ...snapshot,
+      windows: [
+        { ...snapshot.windows[0], bell: true },
+        { ...snapshot.windows[1], activity: true },
+      ],
+    };
+    const { getAllByLabelText } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={flagged} />,
+    );
+
+    expect(getAllByLabelText("tmux.windowBell").length).toBe(1);
+    expect(getAllByLabelText("tmux.windowActivity").length).toBe(1);
+  });
+
+  it("renames a window from the strip", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getAllByTitle, getByLabelText } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    // Every window tab offers rename, so pick the first one.
+    fireEvent.doubleClick(getAllByTitle("tmux.renameWindow")[0]);
+    const input = getByLabelText("tmux.renameWindow");
+    fireEvent.change(input, { target: { value: "deploy" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "rename-window -t @0 deploy",
+    });
+  });
+
+  it("zooms the active pane and shows the zoomed state", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const zoomed: TmuxGatewaySnapshot = {
+      ...snapshot,
+      windows: [
+        snapshot.windows[0],
+        { ...snapshot.windows[1], zoomed: true },
+      ],
+    };
+    const { getByLabelText, rerender } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.click(getByLabelText("tmux.zoomPane"));
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -Z",
+    });
+
+    rerender(<TmuxGatewayView sessionId="s1" snapshot={zoomed} />);
+    expect(getByLabelText("tmux.zoomPane").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("applies a layout from the strip", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getByLabelText } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.change(getByLabelText("tmux.layout"), { target: { value: "tiled" } });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "select-layout tiled",
+    });
+  });
 });

@@ -8,7 +8,17 @@
  * tmux windows are switched from the status strip **below** the panes (matching
  * where tmux itself puts its status line), and from WindTerm-style Alt hotkeys.
  */
-import { ChevronLeft, ChevronRight, LogOut, Plus, SquareTerminal, X } from "lucide-react";
+import {
+  Bell,
+  ChevronLeft,
+  ChevronRight,
+  CircleDot,
+  LogOut,
+  Maximize2,
+  Plus,
+  SquareTerminal,
+  X,
+} from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -135,6 +145,18 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const commandLineOpenRef = useRef(false);
   commandLineOpenRef.current = commandLine !== null;
+  // Inline window rename, opened by double-clicking a window tab.
+  const [renamingWindow, setRenamingWindow] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+
+  const submitRename = useCallback(() => {
+    const target = renamingWindow;
+    setRenamingWindow(null);
+    const name = target?.name.trim();
+    if (!target || !name) return;
+    send(`rename-window -t ${target.id} ${name}`);
+  }, [renamingWindow, send]);
 
   useEffect(() => {
     if (commandLine === null) return;
@@ -358,14 +380,55 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
                 : "text-[var(--df-text-muted)] hover:bg-[var(--df-bg-hover)]"
             }`}
           >
-            <button
-              type="button"
-              className="max-w-40 truncate"
-              title={window.name || window.id}
-              onClick={() => send(`select-window -t ${window.id}`)}
-            >
-              {window.index}: {window.name || window.id}
-            </button>
+            {renamingWindow?.id === window.id ? (
+              <input
+                // biome-ignore lint/a11y/noAutofocus: the rename field is the point of the interaction
+                autoFocus
+                className="h-4 w-24 min-w-0 rounded bg-[var(--df-bg-terminal)] px-1 text-xs text-[var(--df-text)] outline-none"
+                value={renamingWindow.name}
+                aria-label={t("tmux.renameWindow")}
+                onChange={(event) =>
+                  setRenamingWindow({ id: window.id, name: event.target.value })
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitRename();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setRenamingWindow(null);
+                  }
+                  event.stopPropagation();
+                }}
+                onBlur={() => setRenamingWindow(null)}
+              />
+            ) : (
+              <button
+                type="button"
+                className="flex max-w-40 items-center gap-1 truncate"
+                title={t("tmux.renameWindow")}
+                onClick={() => send(`select-window -t ${window.id}`)}
+                onDoubleClick={() =>
+                  setRenamingWindow({ id: window.id, name: window.name })
+                }
+              >
+                <span className="truncate">
+                  {window.index}: {window.name || window.id}
+                </span>
+                {window.bell ? (
+                  <Bell
+                    className="h-3 w-3 shrink-0 text-[var(--df-primary)]"
+                    aria-label={t("tmux.windowBell")}
+                  />
+                ) : null}
+                {window.activity && !window.bell ? (
+                  <CircleDot
+                    className="h-3 w-3 shrink-0 text-[var(--df-text-muted)]"
+                    aria-label={t("tmux.windowActivity")}
+                  />
+                ) : null}
+              </button>
+            )}
             <button
               type="button"
               aria-label={t("tmux.killWindow")}
@@ -387,6 +450,35 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       >
         <Plus className="h-3 w-3" />
       </button>
+      <button
+        type="button"
+        aria-label={t("tmux.zoomPane")}
+        title={t("tmux.zoomPane")}
+        aria-pressed={activeWindow?.zoomed === true}
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-[var(--df-bg-hover)] ${
+          activeWindow?.zoomed
+            ? "bg-[var(--df-bg-hover)] text-[var(--df-primary)]"
+            : "text-[var(--df-text-muted)]"
+        }`}
+        onClick={() => send("resize-pane -Z")}
+      >
+        <Maximize2 className="h-3 w-3" />
+      </button>
+      <select
+        aria-label={t("tmux.layout")}
+        title={t("tmux.layout")}
+        className="h-5 shrink-0 rounded bg-transparent text-xs text-[var(--df-text-muted)] outline-none hover:bg-[var(--df-bg-hover)]"
+        value=""
+        onChange={(event) => {
+          if (event.target.value) send(`select-layout ${event.target.value}`);
+        }}
+      >
+        <option value="">{t("tmux.layout")}</option>
+        <option value="even-horizontal">{t("tmux.layoutEvenHorizontal")}</option>
+        <option value="even-vertical">{t("tmux.layoutEvenVertical")}</option>
+        <option value="main-horizontal">{t("tmux.layoutMainHorizontal")}</option>
+        <option value="tiled">{t("tmux.layoutTiled")}</option>
+      </select>
       <button
         type="button"
         aria-label={t("tmux.detach")}

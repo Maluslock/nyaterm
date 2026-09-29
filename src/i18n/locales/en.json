@@ -2953,10 +2953,19 @@
     "commandPlaceholder": "tmux command, Enter to run",
     "detach": "Detach from tmux (back to the shell)",
     "killWindow": "Kill tmux window",
+    "layout": "Layout",
+    "layoutEvenHorizontal": "Even horizontal",
+    "layoutEvenVertical": "Even vertical",
+    "layoutMainHorizontal": "Main on top",
+    "layoutTiled": "Tiled",
     "newWindow": "New tmux window",
     "nextWindow": "Next tmux window",
     "previousWindow": "Previous tmux window",
-    "waitingForLayout": "Waiting for tmux layout…"
+    "renameWindow": "Rename window",
+    "waitingForLayout": "Waiting for tmux layout…",
+    "windowActivity": "New output",
+    "windowBell": "Bell",
+    "zoomPane": "Zoom pane"
   },
   "translation": {
     "ali": "Alibaba",
