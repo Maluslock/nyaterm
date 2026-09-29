@@ -422,4 +422,18 @@ describe("TmuxGatewayView", () => {
       command: "resize-pane -t %0 -R 4",
     });
   });
+  it("resizes a pane from the keyboard on a focused divider", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getAllByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    fireEvent.keyDown(getAllByRole("separator")[0], { key: "ArrowRight" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -t %0 -R 1",
+    });
+  });
 });

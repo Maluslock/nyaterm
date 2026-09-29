@@ -35,7 +35,7 @@ import {
   type TmuxWindow,
 } from "@/lib/tmuxGateway";
 import { logger } from "@/lib/logger";
-import { type SplitAxis, nextPaneResize } from "@/lib/tmuxPaneResize";
+import { type SplitAxis, nextPaneResize, resizeCommand } from "@/lib/tmuxPaneResize";
 import { TmuxPaneTerminal, type TmuxPaneCellMetrics } from "./TmuxPaneTerminal";
 
 interface TmuxGatewayViewProps {
@@ -56,6 +56,8 @@ interface LayoutNodeProps {
     deltaPx: number,
     sentCells: number,
   ) => number;
+  /** Resize by whole cells, for the keyboard path. */
+  onStepPane: (paneId: string | undefined, axis: SplitAxis, cells: number) => void;
 }
 
 /** Pane at the given edge of a subtree — the one a divider drag resizes. */
@@ -80,6 +82,7 @@ function LayoutNodeView({
   onSelectPane,
   onCellMetrics,
   onResizePane,
+  onStepPane,
 }: LayoutNodeProps) {
   const { t } = useTranslation();
 
@@ -107,14 +110,35 @@ function LayoutNodeView({
         // biome-ignore lint/suspicious/noArrayIndexKey: positional by design
         <Fragment key={index}>
           {index > 0 ? (
-            <div
+            <hr
               data-tmux-gutter
-              role="separator"
+              tabIndex={0}
               aria-orientation={isColumns ? "vertical" : "horizontal"}
               aria-label={t("tmux.resizePane")}
-              className={`shrink-0 hover:bg-[var(--df-primary)] ${
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(
+                (isColumns ? child.width / node.width : child.height / node.height) * 100,
+              )}
+              className={`m-0 shrink-0 border-0 bg-[var(--df-border)] hover:bg-[var(--df-primary)] focus:bg-[var(--df-primary)] focus:outline-none ${
                 isColumns ? "w-1 cursor-col-resize" : "h-1 cursor-row-resize"
               }`}
+              onKeyDown={(event) => {
+                const paneId = edgePaneId(
+                  node.children[index - 1],
+                  isColumns ? "right" : "bottom",
+                );
+                const axis: SplitAxis = isColumns ? "columns" : "rows";
+                const back = isColumns ? "ArrowLeft" : "ArrowUp";
+                const forward = isColumns ? "ArrowRight" : "ArrowDown";
+                if (event.key === back) {
+                  event.preventDefault();
+                  onStepPane(paneId, axis, -1);
+                } else if (event.key === forward) {
+                  event.preventDefault();
+                  onStepPane(paneId, axis, 1);
+                }
+              }}
               onPointerDown={(event) => {
                 const before = node.children[index - 1];
                 const paneId = edgePaneId(before, isColumns ? "right" : "bottom");
@@ -151,6 +175,7 @@ function LayoutNodeView({
               onSelectPane={onSelectPane}
               onCellMetrics={onCellMetrics}
               onResizePane={onResizePane}
+              onStepPane={onStepPane}
             />
           </div>
         </Fragment>
@@ -208,6 +233,15 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       });
       if (step.command) send(step.command);
       return step.sentCells;
+    },
+    [send],
+  );
+
+  const handlePaneStep = useCallback(
+    (paneId: string | undefined, axis: SplitAxis, cells: number) => {
+      if (!paneId) return;
+      const command = resizeCommand(paneId, axis, cells);
+      if (command) send(command);
     },
     [send],
   );
@@ -590,6 +624,7 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
             onSelectPane={handleSelectPane}
             onCellMetrics={handleCellMetrics}
             onResizePane={handlePaneResize}
+            onStepPane={handlePaneStep}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-xs text-[var(--df-text-muted)]">

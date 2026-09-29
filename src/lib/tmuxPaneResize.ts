@@ -50,11 +50,23 @@ export function nextPaneResize({
     return { command: null, sentCells };
   }
 
-  const direction = directionFor(axis, step);
   return {
-    command: `resize-pane -t ${paneId} -${direction} ${Math.abs(step)}`,
+    command: resizeCommand(paneId, axis, step),
     sentCells: cells,
   };
+}
+
+/**
+ * tmux command that moves one edge of a pane by `cells` (negative resizes the
+ * other way). Used by both the pointer drag and the keyboard nudge.
+ */
+export function resizeCommand(
+  paneId: string,
+  axis: SplitAxis,
+  cells: number,
+): string | null {
+  if (!paneId || cells === 0) return null;
+  return `resize-pane -t ${paneId} -${directionFor(axis, cells)} ${Math.abs(cells)}`;
 }
 
 function directionFor(axis: SplitAxis, step: number): ResizeDirection {
