@@ -23,14 +23,17 @@ Utility / Widgets，README 仅一句 “Supports tmux integration”），所以
 
 ## 还差的（按价值/工作量排序）
 
-### A. 可点的操作面窄（纯前端，几小时级）
-现在 UI 只能切窗口 / 新建窗口 / 关闭窗口 / 分离。后端 `tmux_gateway_command` 已能执行任意 tmux
-命令，所以缺的全是前端门面：
+### A. 可点的操作面窄（部分已补，2026-09-29）
+已补：`Ctrl-b :` / 窗口条的终端按钮打开**tmux 命令行**（跑任意 tmux 命令，输出与 `%error`
+回显在输入框下方）；app 级注入（快捷命令、同步输入、AI agent）现在被改投到 tmux 认为活动的
+pane（见 `pane_for_app_write`），不再是"被 tmux 当命令解析"。
 
-- 分屏按钮 / pane 右键菜单（`split-window`、`kill-pane`）
-- 窗口重命名（`rename-window`）、移动窗口（`move-window`）
+仍缺（纯前端门面，后端 `tmux_gateway_command` 已够用）：
+
+- 分屏按钮 / pane 右键菜单（`split-window`、`kill-pane`）——现在只能用命令行或 `Ctrl-b %`/`"`
+- 窗口重命名（`rename-window`）、移动窗口（`move-window`）——同上，命令行可用但没 UI
 - 窗口列表浮层（`choose-tree` 或自绘列表）
-- 一个 `:` 命令输入框，用来跑任意 tmux 命令
+- pane 活动的可视化（哪个 pane 是活动 pane 现在只有边框/光标的间接提示）
 
 ### B. 拖分隔条改 pane 大小（需要布局数学，半天级）
 分隔条目前是"镜子"：只能靠调整客户端尺寸整体缩放，拖某一条分隔线不会只改相邻两个 pane。
@@ -58,3 +61,10 @@ copy-mode，没有键位提示或 UI 包装。
 1. 先做 A：一次投入就能明显补平"能点的操作"，且不碰协议与布局。
 2. B 单独排期（唯一需要动几何换算的部分）。
 3. C/D/E/F 按需打磨。
+
+## 2026-09-29 已补
+
+- tmux 命令行（`Ctrl-b :` 或窗口条按钮）+ 命令回答/`%error` 回显
+- app 级输入改投活动 pane（控制模式下写会话会被 tmux 当命令解析）
+- `Ctrl-b` 后需要 Shift 的组合（`"`、`%`、`:`）修复：前缀期间忽略纯修饰键
+- 分离/退出后焦点交还终端；普通终端在视图下持续挂着，提示符不丢
