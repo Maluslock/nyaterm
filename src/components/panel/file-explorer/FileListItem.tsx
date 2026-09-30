@@ -60,6 +60,8 @@ interface FileListItemProps {
   onPaste?: () => void;
   canPaste?: boolean;
   onSendToTerminal?: (entry: FileEntry, mode: "dir" | "name" | "full") => void;
+  onEnterDirectoryInTerminal?: (path: string) => void;
+  onOpenDirectoryInNewTerminal?: (path: string) => void;
   onProperties: (entry: FileEntry) => void;
   aiActions: AICustomActionConfig[];
   onAIAction: (entry: FileEntry, action: AICustomActionConfig) => void;
@@ -123,6 +125,8 @@ export function FileListItem({
   onPaste,
   canPaste,
   onSendToTerminal,
+  onEnterDirectoryInTerminal,
+  onOpenDirectoryInNewTerminal,
   onProperties,
   aiActions,
   onAIAction,
@@ -498,8 +502,14 @@ export function FileListItem({
           onAddToFavorites={(row) => onAddToFavorites(row.entry)}
           onCopyPath={(row, mode) => onCopyPath(row.entry, mode)}
           onSendToTerminal={
-            onSendToTerminal
-              ? (row, mode) => onSendToTerminal(row.entry, mode)
+            onSendToTerminal ? (row, mode) => onSendToTerminal(row.entry, mode) : undefined
+          }
+          onEnterDirectoryInTerminal={
+            onEnterDirectoryInTerminal ? (row) => onEnterDirectoryInTerminal(row.path) : undefined
+          }
+          onOpenDirectoryInNewTerminal={
+            onOpenDirectoryInNewTerminal
+              ? (row) => onOpenDirectoryInNewTerminal(row.path)
               : undefined
           }
           onProperties={(row) => onProperties(row.entry)}

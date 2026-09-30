@@ -7,6 +7,7 @@ const {
   closeMock,
   emitMock,
   invokeMock,
+  localTerminalMock,
   rdpFormMock,
   serialFormMock,
   sshFormMock,
@@ -16,6 +17,7 @@ const {
   closeMock: vi.fn(),
   emitMock: vi.fn(),
   invokeMock: vi.fn(),
+  localTerminalMock: vi.fn(),
   rdpFormMock: vi.fn(),
   serialFormMock: vi.fn(),
   sshFormMock: vi.fn(),
@@ -45,7 +47,12 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
-vi.mock("@/components/sessions/LocalTerminal", () => ({ LocalTerminal: () => null }));
+vi.mock("@/components/sessions/LocalTerminal", () => ({
+  LocalTerminal: (props: Record<string, unknown>) => {
+    localTerminalMock(props);
+    return null;
+  },
+}));
 vi.mock("@/components/sessions/SerialForm", () => ({
   SerialForm: (props: Record<string, unknown>) => {
     serialFormMock(props);
@@ -252,16 +259,35 @@ describe("NewSessionPage", () => {
           ]);
         case "list_serial_ports":
           return Promise.resolve(["COM3"]);
+        case "get_default_local_shell":
+          return Promise.resolve("/bin/zsh");
         case "save_connection":
           return Promise.resolve(rdpConnection.id);
         default:
           return Promise.reject(new Error(`Unexpected command: ${command}`));
       }
     });
+    localTerminalMock.mockReset();
     rdpFormMock.mockReset();
     serialFormMock.mockReset();
     sshFormMock.mockReset();
     telnetFormMock.mockReset();
+  });
+
+  it("uses the backend-resolved default shell for a new local terminal", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<NewSessionPage />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "dialog.localTerminal" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+
+    await waitFor(() => {
+      expect(localTerminalMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ shellPath: "/bin/zsh" }),
+      );
+    });
   });
 
   it("restores an RDP jump host and keeps it when saving without changes", async () => {

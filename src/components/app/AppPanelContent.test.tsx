@@ -25,7 +25,7 @@ vi.mock("@/components/panel/file-explorer/FileTransfer", () => ({
   },
 }));
 
-function renderFileExplorer(activePane: FileDocumentPane) {
+function renderFileExplorer(activePane: FileDocumentPane, onOpenDirectoryInNewTerminal = vi.fn()) {
   return render(
     <AppPanelContent
       panelId="fileExplorer"
@@ -58,6 +58,7 @@ function renderFileExplorer(activePane: FileDocumentPane) {
       onSessionDisconnect={vi.fn()}
       canReconnect={() => false}
       onCommandSend={vi.fn()}
+      onOpenDirectoryInNewTerminal={onOpenDirectoryInNewTerminal}
       onToggleSessionRecording={vi.fn()}
       onSaveSessionTranscript={vi.fn()}
     />,
@@ -86,7 +87,8 @@ describe("AppPanelContent file explorer", () => {
       },
     };
 
-    renderFileExplorer(pane);
+    const onOpenDirectoryInNewTerminal = vi.fn();
+    renderFileExplorer(pane, onOpenDirectoryInNewTerminal);
 
     expect(fileExplorerMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -94,6 +96,7 @@ describe("AppPanelContent file explorer", () => {
         activeSessionType: "SSH",
         activeConnectionId: "connection-1",
         activeSessionName: null,
+        onOpenDirectoryInNewTerminal,
       }),
     );
     expect(fileTransferMock).toHaveBeenCalledWith(

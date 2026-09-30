@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { isMacOS, isWindows } from "@/lib/platform";
 import type { RecordingMode } from "@/types/global";
 
 interface LocalTerminalProps {
@@ -37,7 +38,17 @@ interface LocalTerminalProps {
   setDynamicTabTitle: (v: boolean) => void;
 }
 
-const BUILTIN_SHELL_PATHS = ["powershell.exe", "cmd.exe", "bash", "wsl.exe", "wt.exe"] as const;
+const BUILTIN_SHELL_PATHS: readonly string[] = isWindows
+  ? ["powershell.exe", "cmd.exe", "bash", "wsl.exe", "wt.exe"]
+  : ["zsh", "bash", "fish"];
+
+function shellBasename(path: string) {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() || path;
+}
+
+function matchesShellPreset(shellPath: string, preset: string) {
+  return shellPath === preset || shellBasename(shellPath) === shellBasename(preset);
+}
 
 export function LocalTerminal({
   shellPath,
@@ -90,9 +101,8 @@ export function LocalTerminal({
           <div className="flex flex-col gap-2 sm:flex-row">
             <Select
               value={
-                BUILTIN_SHELL_PATHS.includes(shellPath as (typeof BUILTIN_SHELL_PATHS)[number])
-                  ? shellPath
-                  : "custom"
+                BUILTIN_SHELL_PATHS.find((preset) => matchesShellPreset(shellPath, preset)) ??
+                "custom"
               }
               onValueChange={handleShellSelectChange}
             >
@@ -100,15 +110,26 @@ export function LocalTerminal({
                 <SelectValue placeholder={t("dialog.selectShell", "Select Shell")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="powershell.exe">
-                  {t("dialog.shellPowerShell", "PowerShell")}
-                </SelectItem>
-                <SelectItem value="cmd.exe">{t("dialog.shellCmd", "Command Prompt")}</SelectItem>
-                <SelectItem value="bash">{t("dialog.shellBash", "Bash")}</SelectItem>
-                <SelectItem value="wsl.exe">{t("dialog.shellWsl", "WSL")}</SelectItem>
-                <SelectItem value="wt.exe">
-                  {t("dialog.shellWindowsTerminal", "Windows Terminal")}
-                </SelectItem>
+                {isWindows ? (
+                  <>
+                    <SelectItem value="powershell.exe">
+                      {t("dialog.shellPowerShell", "PowerShell")}
+                    </SelectItem>
+                    <SelectItem value="cmd.exe">{t("dialog.shellCmd", "Command Prompt")}</SelectItem>
+                    <SelectItem value="bash">{t("dialog.shellBash", "Bash")}</SelectItem>
+                    <SelectItem value="wsl.exe">{t("dialog.shellWsl", "WSL")}</SelectItem>
+                    <SelectItem value="wt.exe">
+                      {t("dialog.shellWindowsTerminal", "Windows Terminal")}
+                    </SelectItem>
+                  </>
+                ) : (
+                  <>
+                    {isMacOS && <SelectItem value="zsh">Zsh</SelectItem>}
+                    <SelectItem value="bash">{t("dialog.shellBash", "Bash")}</SelectItem>
+                    <SelectItem value="fish">Fish</SelectItem>
+                    {!isMacOS && <SelectItem value="zsh">Zsh</SelectItem>}
+                  </>
+                )}
                 <SelectItem value="custom">{t("dialog.shellCustom", "Custom...")}</SelectItem>
               </SelectContent>
             </Select>

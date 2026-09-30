@@ -142,8 +142,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ]);
 }
 
-function buildZmodemReceiveCommand(conflictMode: ZmodemUploadConflictMode): string {
-  return conflictMode === "overwrite" ? "rz -y" : "rz";
+export function buildZmodemReceiveCommand(conflictMode: ZmodemUploadConflictMode): string {
+  return conflictMode === "overwrite" ? "rz -e -y" : "rz -e";
 }
 
 export interface ConflictProbeResult {

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatOptions, ReasoningEffort};
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ReasoningEffort};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, WebConfig};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
@@ -10,13 +10,17 @@ use serde_json::Value;
 
 use crate::config::{
     self, AI_REQUEST_USER_AGENT_DEFAULT, AiApiFormat, AiBackendKind, AiModelConfigItem,
-    AiModelSource, AiProviderCredential, AiProviderKind, AiReasoningEffort, AiSettings,
-    ai_model_id_for_credential,
+    AiModelSource, AiProviderApiProtocol, AiProviderCredential, AiProviderKind, AiReasoningEffort,
+    AiSettings, ai_model_id_for_credential, ai_model_id_for_provider,
 };
 use crate::error::{AppError, AppResult};
 use crate::utils::url::{join_api_base_url, normalize_api_base_url};
 
 use super::types::{AiChatRequest, AiModelDiscovery};
+
+const MODEL_TEST_SYSTEM_PROMPT: &str = "You are NyaTerm's terminal AI connectivity check. Reply with OK only; do not suggest or run commands.";
+const MODEL_TEST_USER_PROMPT: &str = "Confirm that this model can respond.";
+const MODEL_TEST_MAX_OUTPUT_TOKENS: u32 = 64;
 
 #[derive(Debug, Clone)]
 pub(super) struct ResolvedAiModel {
@@ -59,6 +63,8 @@ pub(super) fn build_chat_options(settings: &AiSettings) -> ChatOptions {
 
     if let Some(reasoning_effort) = genai_reasoning_effort(&settings.default_reasoning_effort) {
         options = options.with_reasoning_effort(reasoning_effort);
+    } else if matches!(settings.default_reasoning_effort, AiReasoningEffort::Ultra) {
+        options = options.with_extra_body(serde_json::json!({ "reasoning_effort": "ultra" }));
     }
 
     options
@@ -68,10 +74,13 @@ fn genai_reasoning_effort(value: &AiReasoningEffort) -> Option<ReasoningEffort> 
     match value {
         AiReasoningEffort::Auto => None,
         AiReasoningEffort::None => Some(ReasoningEffort::None),
+        AiReasoningEffort::Minimal => Some(ReasoningEffort::Minimal),
         AiReasoningEffort::Low => Some(ReasoningEffort::Low),
         AiReasoningEffort::Medium => Some(ReasoningEffort::Medium),
         AiReasoningEffort::High => Some(ReasoningEffort::High),
         AiReasoningEffort::XHigh => Some(ReasoningEffort::XHigh),
+        AiReasoningEffort::Max => Some(ReasoningEffort::Max),
+        AiReasoningEffort::Ultra => None,
     }
 }
 
@@ -88,6 +97,13 @@ pub(super) fn resolve_request_model(
 
     let selected_model = resolve_request_model_config(settings, request)?;
 
+    resolve_model_config(settings, &selected_model)
+}
+
+fn resolve_model_config(
+    settings: &AiSettings,
+    selected_model: &AiModelConfigItem,
+) -> AppResult<ResolvedAiModel> {
     if selected_model.backend == AiBackendKind::Codex {
         return Err(AppError::Config(
             "Codex models must be routed through codex app-server".to_string(),
@@ -100,7 +116,7 @@ pub(super) fn resolve_request_model(
         .or_else(|| infer_provider_kind_from_model_id(&selected_model.id));
 
     let credential =
-        resolve_model_credential(settings, &selected_model, model_provider_kind.as_ref())?;
+        resolve_model_credential(settings, selected_model, model_provider_kind.as_ref())?;
     let provider_kind = credential
         .as_ref()
         .map(|credential| credential.provider_kind.clone())
@@ -114,7 +130,6 @@ pub(super) fn resolve_request_model(
     validate_model_credential(&provider_kind, credential.as_ref())?;
 
     tracing::info!(
-        requested_model_id = ?request.model_id,
         resolved_model_id = %selected_model.id,
         resolved_model_name = %selected_model.name,
         provider_kind = ?provider_kind,
@@ -131,6 +146,47 @@ pub(super) fn resolve_request_model(
             .unwrap_or_default(),
         credential,
     })
+}
+
+pub async fn test_model_connection(settings: &AiSettings, model_id: &str) -> AppResult<()> {
+    // The chat panel's selected effort may belong to a different model.
+    // Connectivity checks use the target model's own default reasoning behavior.
+    let mut settings = settings.clone();
+    settings.default_reasoning_effort = AiReasoningEffort::Auto;
+    let selected_model = settings
+        .models
+        .iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::Config("AI model is no longer configured".to_string()))?;
+    let resolved_model = resolve_model_config(&settings, selected_model)?;
+    let timeout = Duration::from_millis(settings.timeout_ms.clamp(1_000, 60_000));
+
+    tokio::time::timeout(timeout, async {
+        if super::responses::uses_responses_api(&resolved_model) {
+            return super::responses::test_responses_model(
+                &settings,
+                &resolved_model,
+                MODEL_TEST_SYSTEM_PROMPT,
+                MODEL_TEST_USER_PROMPT,
+                MODEL_TEST_MAX_OUTPUT_TOKENS,
+            )
+            .await;
+        }
+
+        let client = build_client(&resolved_model, &settings)?;
+        let request = ChatRequest::new(vec![
+            ChatMessage::system(MODEL_TEST_SYSTEM_PROMPT),
+            ChatMessage::user(MODEL_TEST_USER_PROMPT),
+        ]);
+        let options = build_chat_options(&settings).with_max_tokens(MODEL_TEST_MAX_OUTPUT_TOKENS);
+        client
+            .exec_chat(&resolved_model.model_name, request, Some(&options))
+            .await
+            .map_err(|error| AppError::Config(format!("AI model test failed: {error}")))?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| AppError::Config("AI model test timed out".to_string()))?
 }
 
 fn infer_provider_kind_from_model_id(model_id: &str) -> Option<AiProviderKind> {
@@ -156,7 +212,14 @@ fn resolve_model_credential(
     model: &AiModelConfigItem,
     provider_kind: Option<&AiProviderKind>,
 ) -> AppResult<Option<AiProviderCredential>> {
-    if let Some(credential_id) = model.credential_id.as_deref() {
+    // Legacy built-in models use the provider ID as their implicit credential ID.
+    // Never let a newly added account of the same kind capture those models.
+    let implicit_credential_id = model
+        .id
+        .split_once(':')
+        .map(|(prefix, _)| prefix)
+        .filter(|prefix| is_builtin_ai_provider_credential_id(prefix));
+    if let Some(credential_id) = model.credential_id.as_deref().or(implicit_credential_id) {
         let credential = settings
             .provider_credentials
             .iter()
@@ -229,7 +292,7 @@ pub(super) fn build_client(model: &ResolvedAiModel, settings: &AiSettings) -> Ap
         "Building AI client"
     );
 
-    let adapter_kind = adapter_kind(&model.provider_kind);
+    let adapter_kind = adapter_kind_for_model(model);
     let mapped_model = genai_model_name(&model.provider_kind, &model.model_name);
     let api_key = model
         .credential
@@ -243,7 +306,13 @@ pub(super) fn build_client(model: &ResolvedAiModel, settings: &AiSettings) -> Ap
         .map(normalize_api_base_url)
         .transpose()?
         .filter(|value| !value.trim().is_empty());
-    let allows_empty_auth = model.provider_kind == AiProviderKind::OpenaiCompatible;
+    let allows_empty_auth = model.provider_kind == AiProviderKind::OpenaiCompatible
+        || (model.provider_kind == AiProviderKind::Ollama
+            && model
+                .credential
+                .as_ref()
+                .and_then(|credential| credential.api_protocol.as_ref())
+                == Some(&AiProviderApiProtocol::OpenaiCompatible));
 
     let resolver =
         ServiceTargetResolver::from_resolver_fn(move |service_target: genai::ServiceTarget| {
@@ -315,6 +384,24 @@ fn adapter_kind(kind: &AiProviderKind) -> AdapterKind {
     }
 }
 
+fn adapter_kind_for_model(model: &ResolvedAiModel) -> AdapterKind {
+    match model
+        .credential
+        .as_ref()
+        .and_then(|credential| credential.api_protocol.as_ref())
+    {
+        None => adapter_kind(&model.provider_kind),
+        Some(AiProviderApiProtocol::OpenaiCompatible) => match model.provider_kind {
+            AiProviderKind::Deepseek => AdapterKind::DeepSeek,
+            AiProviderKind::Groq => AdapterKind::Groq,
+            _ => AdapterKind::OpenAI,
+        },
+        Some(AiProviderApiProtocol::Anthropic) => AdapterKind::Anthropic,
+        Some(AiProviderApiProtocol::Gemini) => AdapterKind::Gemini,
+        Some(AiProviderApiProtocol::Ollama) => AdapterKind::Ollama,
+    }
+}
+
 fn genai_model_name(provider_kind: &AiProviderKind, model_name: &str) -> String {
     if matches!(provider_kind, AiProviderKind::Deepseek)
         && let Some(base_model_name) = model_name.strip_suffix("-none")
@@ -333,54 +420,52 @@ pub async fn list_model_names(app: &tauri::AppHandle) -> AppResult<Vec<AiModelDi
 pub async fn list_model_names_for_settings(
     settings: &AiSettings,
 ) -> AppResult<Vec<AiModelDiscovery>> {
-    let custom_credentials = openai_compatible_model_discovery_credentials(settings);
+    let credentials = model_discovery_credentials(settings);
 
     let mut models = BTreeMap::new();
     let mut errors = Vec::new();
 
-    for credential in &custom_credentials {
-        let base_url = credential
-            .base_url
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if base_url.is_empty() {
-            continue;
-        }
-        let api_key = credential.api_key.clone().filter(|v| !v.trim().is_empty());
+    for credential in credentials {
         let label = credential.name.as_str();
         tracing::info!(
             credential = label,
-            url = base_url,
-            "Fetching model list from custom provider"
+            provider_kind = ?credential.provider_kind,
+            "Fetching model list from provider"
         );
-        match fetch_openai_compatible_models(&base_url, api_key.as_deref(), settings).await {
+        match fetch_credential_model_names(credential, settings).await {
             Ok(names) => {
                 tracing::info!(
                     credential = label,
                     count = names.len(),
-                    models = ?names,
-                    "Fetched models from custom provider"
+                    "Fetched models from provider"
                 );
                 for name in names {
                     let trimmed = name.trim();
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let id = ai_model_id_for_credential(&credential.id, trimmed);
+                    let builtin = is_builtin_ai_provider_credential_id(&credential.id);
+                    let id = if builtin {
+                        ai_model_id_for_provider(&credential.provider_kind, trimmed)
+                    } else {
+                        ai_model_id_for_credential(&credential.id, trimmed)
+                    };
                     models.entry(id.clone()).or_insert(AiModelDiscovery {
                         id,
                         name: trimmed.to_string(),
                         backend: AiBackendKind::Genai,
-                        provider_kind: Some(AiProviderKind::OpenaiCompatible),
-                        credential_id: Some(credential.id.clone()),
+                        provider_kind: Some(credential.provider_kind.clone()),
+                        credential_id: if builtin {
+                            None
+                        } else {
+                            Some(credential.id.clone())
+                        },
                         source: AiModelSource::RustGenai,
                     });
                 }
             }
             Err(error) => {
-                tracing::warn!(credential = label, %error, "Failed to fetch models from custom provider");
+                tracing::warn!(credential = label, %error, "Failed to fetch models from provider");
                 errors.push(format!("{label}: {error}"));
             }
         }
@@ -396,17 +481,210 @@ pub async fn list_model_names_for_settings(
     Ok(models.into_values().collect())
 }
 
-fn openai_compatible_model_discovery_credentials(
+pub async fn test_provider_connection(
     settings: &AiSettings,
-) -> Vec<&AiProviderCredential> {
+    credential_id: &str,
+) -> AppResult<Vec<String>> {
+    let credential = settings
+        .provider_credentials
+        .iter()
+        .find(|credential| credential.id == credential_id && credential.enabled)
+        .ok_or_else(|| AppError::Config("No enabled AI provider selected".to_string()))?;
+
+    fetch_credential_model_names(credential, settings).await
+}
+
+async fn fetch_credential_model_names(
+    credential: &AiProviderCredential,
+    settings: &AiSettings,
+) -> AppResult<Vec<String>> {
+    let base_url = credential.base_url.as_deref().unwrap_or_default().trim();
+    if base_url.is_empty() {
+        return Err(AppError::Config(
+            "AI provider API base URL is required".to_string(),
+        ));
+    }
+
+    let api_key = credential
+        .api_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty());
+    let protocol =
+        credential
+            .api_protocol
+            .clone()
+            .unwrap_or_else(|| match &credential.provider_kind {
+                AiProviderKind::Anthropic => AiProviderApiProtocol::Anthropic,
+                AiProviderKind::Gemini => AiProviderApiProtocol::Gemini,
+                AiProviderKind::Ollama => AiProviderApiProtocol::Ollama,
+                _ => AiProviderApiProtocol::OpenaiCompatible,
+            });
+    match protocol {
+        AiProviderApiProtocol::OpenaiCompatible => {
+            fetch_openai_compatible_models(base_url, api_key, settings).await
+        }
+        AiProviderApiProtocol::Anthropic => {
+            fetch_provider_model_names(
+                base_url,
+                api_key,
+                settings,
+                "models",
+                Some(("limit", "1000")),
+                "data",
+                "id",
+                AiProviderApiProtocol::Anthropic,
+            )
+            .await
+        }
+        AiProviderApiProtocol::Gemini => {
+            fetch_provider_model_names(
+                base_url,
+                api_key,
+                settings,
+                "models",
+                Some(("pageSize", "1000")),
+                "models",
+                "name",
+                AiProviderApiProtocol::Gemini,
+            )
+            .await
+        }
+        AiProviderApiProtocol::Ollama => {
+            fetch_provider_model_names(
+                base_url,
+                api_key,
+                settings,
+                "api/tags",
+                None,
+                "models",
+                "name",
+                AiProviderApiProtocol::Ollama,
+            )
+            .await
+        }
+    }
+}
+
+async fn fetch_provider_model_names(
+    base_url: &str,
+    api_key: Option<&str>,
+    settings: &AiSettings,
+    path: &str,
+    query: Option<(&str, &str)>,
+    response_field: &str,
+    model_name_field: &str,
+    protocol: AiProviderApiProtocol,
+) -> AppResult<Vec<String>> {
+    let url = join_api_base_url(base_url, path)?;
+    let mut url = reqwest::Url::parse(&url)
+        .map_err(|error| AppError::Config(format!("Invalid model list URL: {error}")))?;
+    if let Some((name, value)) = query {
+        url.query_pairs_mut().append_pair(name, value);
+    }
+    let client = reqwest::Client::builder()
+        .default_headers(ai_request_headers(settings)?)
+        .build()
+        .map_err(|error| AppError::Config(format!("Failed to build AI HTTP client: {error}")))?;
+    let mut names = Vec::new();
+    let mut cursor: Option<(&str, String)> = None;
+    let mut seen_cursors = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let mut page_url = url.clone();
+        if let Some((key, value)) = &cursor {
+            page_url.query_pairs_mut().append_pair(key, value);
+        }
+        let mut request = client
+            .get(page_url.as_str())
+            .timeout(Duration::from_secs(15));
+        if let Some(key) = api_key {
+            request = match protocol {
+                AiProviderApiProtocol::Anthropic => request
+                    .header("x-api-key", key)
+                    .header("anthropic-version", "2023-06-01"),
+                AiProviderApiProtocol::Gemini => request.header("x-goog-api-key", key),
+                AiProviderApiProtocol::Ollama => request.bearer_auth(key),
+                AiProviderApiProtocol::OpenaiCompatible => request.bearer_auth(key),
+            };
+        } else if protocol == AiProviderApiProtocol::Anthropic {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        let response = request.send().await.map_err(|error| {
+            AppError::Config(format!("Failed to fetch models from {url}: {error}"))
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Config(format!(
+                "Failed to fetch models from {url}: {status} {body}"
+            )));
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| AppError::Config(format!("Invalid JSON from {url}: {error}")))?;
+        let entries = body[response_field]
+            .as_array()
+            .ok_or_else(|| AppError::Config(format!("Invalid model list from {url}")))?;
+        for entry in entries {
+            let name = entry[model_name_field]
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| AppError::Config("Invalid model list: missing model ID".into()))?;
+            names.push(if protocol == AiProviderApiProtocol::Gemini {
+                name.strip_prefix("models/").unwrap_or(name).to_string()
+            } else {
+                name.to_string()
+            });
+        }
+        cursor = next_models_cursor(&body, &protocol)?;
+        match &cursor {
+            None => return Ok(names),
+            Some((_, value)) if !seen_cursors.insert(value.clone()) => {
+                return Err(AppError::Config(
+                    "Model list pagination repeated a cursor".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Err(AppError::Config(
+        "Model list pagination exceeded 100 pages".into(),
+    ))
+}
+
+fn next_models_cursor(
+    body: &Value,
+    protocol: &AiProviderApiProtocol,
+) -> AppResult<Option<(&'static str, String)>> {
+    let (key, value) = match protocol {
+        AiProviderApiProtocol::Anthropic if body["has_more"].as_bool() == Some(true) => {
+            let value = body["last_id"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::Config("Model list has more pages but no last_id".into())
+                })?;
+            ("after_id", value)
+        }
+        AiProviderApiProtocol::Gemini => {
+            let Some(value) = body["nextPageToken"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+            else {
+                return Ok(None);
+            };
+            ("pageToken", value)
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some((key, value.to_string())))
+}
+
+fn model_discovery_credentials(settings: &AiSettings) -> Vec<&AiProviderCredential> {
     settings
         .provider_credentials
         .iter()
-        .filter(|credential| {
-            credential.enabled
-                && credential.provider_kind == AiProviderKind::OpenaiCompatible
-                && !is_builtin_ai_provider_credential_id(&credential.id)
-        })
+        .filter(|credential| credential.enabled)
         .collect()
 }
 
@@ -459,15 +737,25 @@ async fn fetch_openai_compatible_models(
         .json()
         .await
         .map_err(|e| AppError::Config(format!("Invalid JSON from {url}: {e}")))?;
-    let names: Vec<String> = body["data"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item["id"].as_str().map(String::from))
-                .collect()
+    parse_openai_model_names(&body)
+}
+
+fn parse_openai_model_names(body: &Value) -> AppResult<Vec<String>> {
+    let models = body["data"].as_array().ok_or_else(|| {
+        AppError::Config("Invalid models response: expected a data array".to_string())
+    })?;
+    models
+        .iter()
+        .map(|item| {
+            item["id"]
+                .as_str()
+                .filter(|name| !name.trim().is_empty())
+                .map(String::from)
+                .ok_or_else(|| {
+                    AppError::Config("Invalid models response: missing model ID".to_string())
+                })
         })
-        .unwrap_or_default();
-    Ok(names)
+        .collect()
 }
 
 fn openai_compatible_models_url(base_url: &str) -> AppResult<String> {
@@ -488,6 +776,92 @@ mod tests {
         }
     }
 
+    #[test]
+    fn builtin_models_keep_their_original_account() {
+        let mut settings = AiSettings::default();
+        settings.provider_credentials = vec![
+            test_credential_with_id("credential-new", AiProviderKind::Openai, Some("new-key")),
+            test_credential_with_id("openai", AiProviderKind::Openai, Some("original-key")),
+        ];
+        let model = settings
+            .models
+            .iter()
+            .find(|model| model.id.starts_with("openai:"))
+            .unwrap();
+        let credential = resolve_model_credential(&settings, model, Some(&AiProviderKind::Openai))
+            .unwrap()
+            .unwrap();
+        assert_eq!(credential.id, "openai");
+
+        settings.provider_credentials[1].enabled = false;
+        let model = settings
+            .models
+            .iter()
+            .find(|model| model.id.starts_with("openai:"))
+            .unwrap();
+        assert!(resolve_model_credential(&settings, model, Some(&AiProviderKind::Openai)).is_err());
+        settings.provider_credentials.pop();
+        let model = settings
+            .models
+            .iter()
+            .find(|model| model.id.starts_with("openai:"))
+            .unwrap();
+        assert!(resolve_model_credential(&settings, model, Some(&AiProviderKind::Openai)).is_err());
+    }
+
+    #[test]
+    fn models_response_distinguishes_empty_lists_from_invalid_payloads() {
+        assert_eq!(
+            parse_openai_model_names(&serde_json::json!({"data": []})).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_openai_model_names(&serde_json::json!({"data": [{"id": "model-a"}]})).unwrap(),
+            vec!["model-a"]
+        );
+        assert!(parse_openai_model_names(&serde_json::json!({"error": "unauthorized"})).is_err());
+        assert!(parse_openai_model_names(&serde_json::json!({"data": [{}]})).is_err());
+    }
+
+    #[test]
+    fn model_pagination_uses_protocol_specific_cursors() {
+        assert_eq!(
+            next_models_cursor(
+                &serde_json::json!({"has_more": true, "last_id": "claude-a"}),
+                &AiProviderApiProtocol::Anthropic
+            )
+            .unwrap(),
+            Some(("after_id", "claude-a".into()))
+        );
+        assert!(
+            next_models_cursor(
+                &serde_json::json!({"has_more": true}),
+                &AiProviderApiProtocol::Anthropic
+            )
+            .is_err()
+        );
+        assert_eq!(
+            next_models_cursor(
+                &serde_json::json!({"nextPageToken": "page-2"}),
+                &AiProviderApiProtocol::Gemini
+            )
+            .unwrap(),
+            Some(("pageToken", "page-2".into()))
+        );
+        assert_eq!(
+            next_models_cursor(
+                &serde_json::json!({"has_more": false}),
+                &AiProviderApiProtocol::Anthropic
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            next_models_cursor(&serde_json::json!({}), &AiProviderApiProtocol::Gemini).unwrap(),
+            None
+        );
+    }
+
     fn test_credential(kind: AiProviderKind, api_key: Option<&str>) -> AiProviderCredential {
         test_credential_with_id("credential-test", kind, api_key)
     }
@@ -501,6 +875,8 @@ mod tests {
             id: id.to_string(),
             name: "Test Provider".to_string(),
             provider_kind: kind,
+            icon_data_url: None,
+            api_protocol: None,
             api_format: AiApiFormat::default(),
             base_url: Some("https://api.example.com/v1/".to_string()),
             api_key: api_key.map(str::to_string),
@@ -689,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn model_discovery_credentials_only_include_custom_openai_compatible() {
+    fn model_discovery_credentials_include_enabled_providers() {
         let mut settings = AiSettings::default();
         settings.provider_credentials = vec![
             test_credential_with_id("openai", AiProviderKind::OpenaiCompatible, None),
@@ -710,12 +1086,20 @@ mod tests {
             },
         ];
 
-        let ids: Vec<_> = openai_compatible_model_discovery_credentials(&settings)
+        let ids: Vec<_> = model_discovery_credentials(&settings)
             .into_iter()
             .map(|credential| credential.id.as_str())
             .collect();
 
-        assert_eq!(ids, vec!["credential-openai"]);
+        assert_eq!(
+            ids,
+            vec![
+                "openai",
+                "credential-openai",
+                "credential-anthropic",
+                "credential-gemini"
+            ]
+        );
     }
 
     #[test]
@@ -734,6 +1118,7 @@ mod tests {
             enabled: true,
             source: AiModelSource::Manual,
             last_seen_at: None,
+            supported_reasoning_efforts: None,
         }];
         settings.default_model_id = Some("credential-b:claude-test".to_string());
 

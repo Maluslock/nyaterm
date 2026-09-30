@@ -245,6 +245,7 @@ pub enum SessionCommand {
     /// Input to send to the terminal.
     Write {
         data: Vec<u8>,
+        raw: bool,
         automated: bool,
         origin: InputOrigin,
         sensitivity: InputSensitivity,
@@ -1474,6 +1475,7 @@ mod tests {
                 "sftp-only",
                 SessionCommand::Write {
                     data: b"ignored".to_vec(),
+                    raw: false,
                     automated: false,
                     origin: InputOrigin::Keyboard,
                     sensitivity: crate::core::InputSensitivity::Normal,
@@ -1567,6 +1569,7 @@ mod tests {
                 "local-startup",
                 SessionCommand::Write {
                     data: b"x".to_vec(),
+                    raw: false,
                     automated: false,
                     origin: InputOrigin::Keyboard,
                     sensitivity: super::InputSensitivity::Normal,

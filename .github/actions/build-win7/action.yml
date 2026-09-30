@@ -60,6 +60,10 @@ runs:
       shell: pwsh
       run: pnpm install --frozen-lockfile
 
+    - name: Prepare ConPTY runtime
+      shell: pwsh
+      run: pnpm prepare:conpty
+
     - name: Install Win7 Rust toolchain
       uses: dtolnay/rust-toolchain@master
       with:

@@ -74,6 +74,23 @@ impl Header {
     where
         P: Write + ?Sized,
     {
+        self.write_with_escape_control(port, false)
+    }
+
+    /// Writes a header using the receiver's negotiated control escaping policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Write`] if the port write fails, or [`Error::OutOfMemory`]
+    /// if the encoded header exceeds its buffer.
+    pub fn write_with_escape_control<P>(
+        &self,
+        port: &mut P,
+        escape_control: bool,
+    ) -> Result<Option<()>, Error>
+    where
+        P: Write + ?Sized,
+    {
         if write_header_start(port, self.encoding)?.is_none() {
             return Ok(None);
         }
@@ -93,14 +110,14 @@ impl Header {
             let len = out.len() * 2;
             let hex = &mut hex_buf.get_mut(..len).ok_or(Error::UnexpectedEof)?;
             hex::encode_to_slice(&out, hex).map_err(|_| Error::OutOfMemory)?;
-            if write_slice_escaped(port, hex)?.is_none() {
+            if write_slice_escaped_with_control(port, hex, escape_control)?.is_none() {
                 return Ok(None);
             }
 
             if write_header_end_hex(port, self.frame)?.is_none() {
                 return Ok(None);
             }
-        } else if write_slice_escaped(port, &out)?.is_none() {
+        } else if write_slice_escaped_with_control(port, &out, escape_control)?.is_none() {
             return Ok(None);
         }
 
@@ -348,12 +365,16 @@ fn check_crc(data: &[u8], crc: &[u8], encoding: Encoding) -> Result<(), Error> {
     }
 }
 
-pub(crate) fn write_slice_escaped<P>(port: &mut P, buf: &[u8]) -> Result<Option<()>, Error>
+pub(crate) fn write_slice_escaped_with_control<P>(
+    port: &mut P,
+    buf: &[u8],
+    escape_control: bool,
+) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
     for value in buf {
-        if write_byte_escaped(port, *value)?.is_none() {
+        if write_byte_escaped_with_control(port, *value, escape_control)?.is_none() {
             return Ok(None);
         }
     }
@@ -361,11 +382,19 @@ where
     Ok(Some(()))
 }
 
-pub(crate) fn write_byte_escaped<P>(port: &mut P, value: u8) -> Result<Option<()>, Error>
+pub(crate) fn write_byte_escaped_with_control<P>(
+    port: &mut P,
+    value: u8,
+    escape_control: bool,
+) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
-    let escaped = zdle::ZDLE_TABLE[value as usize];
+    let escaped = if escape_control && (value & 0x60) == 0 {
+        value ^ 0x40
+    } else {
+        zdle::ZDLE_TABLE[value as usize]
+    };
     if escaped != value && port.write_byte(ZDLE)?.is_none() {
         return Ok(None);
     }
@@ -387,4 +416,34 @@ where
     } else {
         b
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_byte_unescaped, write_slice_escaped_with_control};
+    use crate::ZDLE;
+
+    #[test]
+    fn control_escaping_round_trips_with_existing_decoder() {
+        let input: Vec<u8> = (0x00..=0x1f).chain(0x80..=0x9f).collect();
+        let mut wire = Vec::new();
+        write_slice_escaped_with_control(&mut wire, &input, true).unwrap();
+
+        let mut decoded = Vec::new();
+        let mut reader = wire.as_slice();
+        while !reader.is_empty() {
+            decoded.push(read_byte_unescaped(&mut reader).unwrap().unwrap());
+        }
+        assert_eq!(decoded, input);
+        assert_eq!(wire.len(), input.len() * 2);
+        assert!(wire
+            .chunks_exact(2)
+            .zip(input.iter())
+            .all(|(pair, byte)| pair == [ZDLE, byte ^ 0x40]));
+        assert!(wire.windows(2).any(|pair| pair == [ZDLE, b'J']));
+
+        let mut default_wire = Vec::new();
+        write_slice_escaped_with_control(&mut default_wire, b"\n", false).unwrap();
+        assert_eq!(default_wire, b"\n");
+    }
 }

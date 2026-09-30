@@ -96,6 +96,8 @@ interface XTermCoreWithRenderDimensions {
 
 const MAX_GEOMETRY_INPUT_CHARS = 64 * 1024;
 const MAX_GEOMETRY_INPUT_LINES = 512;
+const MAX_INPUT_LOGICAL_LINE_ROWS = 512;
+const MAX_INPUT_LOGICAL_LINE_CHARS = 64 * 1024;
 const inputSpanCache = new WeakMap<Terminal, CachedInputSpan>();
 
 function buildLineStringToCellMap(
@@ -139,11 +141,13 @@ function readLogicalLineSnapshotAt(
   const buffer = terminal.buffer.active;
   let startY = anchorY;
   while (startY > 0 && buffer.getLine(startY)?.isWrapped) {
+    if (anchorY - startY + 2 > MAX_INPUT_LOGICAL_LINE_ROWS) return null;
     startY -= 1;
   }
 
   let endY = anchorY;
   while (endY + 1 < buffer.length && buffer.getLine(endY + 1)?.isWrapped) {
+    if (endY - startY + 2 > MAX_INPUT_LOGICAL_LINE_ROWS) return null;
     endY += 1;
   }
 
@@ -151,6 +155,7 @@ function readLogicalLineSnapshotAt(
   const parts: string[] = [];
   const stringIndexToCellOffset: number[] = [];
   let lastCellOffset = 0;
+  let totalChars = 0;
 
   for (let y = startY; y <= endY; y += 1) {
     const line = buffer.getLine(y);
@@ -159,7 +164,14 @@ function readLogicalLineSnapshotAt(
     const rowOffset = (y - startY) * terminal.cols;
     const maxCols = Math.min(line.length, terminal.cols);
     const text = line.translateToString(false, 0, maxCols);
-    const lineMap = buildLineStringToCellMap(line, text.length, maxCols, scratchCell);
+    totalChars += text.length;
+    if (totalChars > MAX_INPUT_LOGICAL_LINE_CHARS) return null;
+    const lineMap = buildLineStringToCellMap(
+      line,
+      text.length,
+      maxCols,
+      scratchCell,
+    );
 
     for (let i = 0; i < text.length; i += 1) {
       stringIndexToCellOffset.push(rowOffset + (lineMap[i] ?? i));
@@ -173,7 +185,9 @@ function readLogicalLineSnapshotAt(
   return { startY, endY, text: parts.join(""), stringIndexToCellOffset };
 }
 
-function readLogicalLineSnapshot(terminal: Terminal): LogicalInputLineSnapshot | null {
+function readLogicalLineSnapshot(
+  terminal: Terminal,
+): LogicalInputLineSnapshot | null {
   const buffer = terminal.buffer.active;
   return readLogicalLineSnapshotAt(terminal, buffer.baseY + buffer.cursorY);
 }
@@ -209,7 +223,11 @@ function findTrackedInputCellSpans(
   return spans;
 }
 
-function toGlobalCellOffset(snapshot: LogicalInputLineSnapshot, cellOffset: number, cols: number) {
+function toGlobalCellOffset(
+  snapshot: LogicalInputLineSnapshot,
+  cellOffset: number,
+  cols: number,
+) {
   return snapshot.startY * cols + cellOffset;
 }
 
@@ -222,7 +240,8 @@ function inputCellSpanToInputSpan(
   const indexToCellOffset: number[] = [];
 
   for (let i = 0; i <= valueLength; i += 1) {
-    const cellOffset = snapshot.stringIndexToCellOffset[span.startStringIndex + i];
+    const cellOffset =
+      snapshot.stringIndexToCellOffset[span.startStringIndex + i];
     if (cellOffset === undefined) return null;
     indexToCellOffset.push(toGlobalCellOffset(snapshot, cellOffset, cols));
   }
@@ -242,7 +261,9 @@ function findSingleLineInputSpans(
   cols: number,
 ): InputSpan[] {
   return findTrackedInputCellSpans(snapshot, state)
-    .map((span) => inputCellSpanToInputSpan(snapshot, span, state.value.length, cols))
+    .map((span) =>
+      inputCellSpanToInputSpan(snapshot, span, state.value.length, cols),
+    )
     .filter((span): span is InputSpan => span !== null);
 }
 
@@ -254,7 +275,10 @@ function findLineSegmentIndex(lineText: string, segment: string): number {
   return lineText.lastIndexOf(segment);
 }
 
-function cellOffsetToInputIndex(indexToCellOffset: number[], cellOffset: number): number {
+function cellOffsetToInputIndex(
+  indexToCellOffset: number[],
+  cellOffset: number,
+): number {
   for (let i = 0; i < indexToCellOffset.length; i += 1) {
     if ((indexToCellOffset[i] ?? 0) >= cellOffset) {
       return i;
@@ -288,7 +312,11 @@ function getSegmentIndexAtCursor(offsets: number[], cursor: number): number {
 function canResolveEnhancedGeometry(state: TerminalInputState): boolean {
   if (!state.value) return false;
   if (state.value.length > MAX_GEOMETRY_INPUT_CHARS) return false;
-  if (state.multiline && state.value.split("\n").length > MAX_GEOMETRY_INPUT_LINES) return false;
+  if (
+    state.multiline &&
+    state.value.split("\n").length > MAX_GEOMETRY_INPUT_LINES
+  )
+    return false;
   return true;
 }
 
@@ -309,7 +337,10 @@ function getNextLogicalLineSnapshot(
   return readLogicalLineSnapshotAt(terminal, current.endY + 1);
 }
 
-function findSegmentStartIndex(lineText: string, segment: string): number | null {
+function findSegmentStartIndex(
+  lineText: string,
+  segment: string,
+): number | null {
   if (!segment) {
     return lineText.length;
   }
@@ -318,7 +349,10 @@ function findSegmentStartIndex(lineText: string, segment: string): number | null
   return index >= 0 ? index : null;
 }
 
-function buildMultilineInputSpan(terminal: Terminal, state: TerminalInputState): InputSpan | null {
+function buildMultilineInputSpan(
+  terminal: Terminal,
+  state: TerminalInputState,
+): InputSpan | null {
   const segments = state.value.split("\n");
   if (segments.length <= 1) return null;
 
@@ -326,10 +360,13 @@ function buildMultilineInputSpan(terminal: Terminal, state: TerminalInputState):
   if (!cursorSnapshot) return null;
 
   const segmentOffsets = getMultilineSegmentOffsets(state.value);
-  const cursorSegmentIndex = getSegmentIndexAtCursor(segmentOffsets, state.cursor);
-  const segmentSnapshots: Array<LogicalInputLineSnapshot | null> = new Array(segments.length).fill(
-    null,
+  const cursorSegmentIndex = getSegmentIndexAtCursor(
+    segmentOffsets,
+    state.cursor,
   );
+  const segmentSnapshots: Array<LogicalInputLineSnapshot | null> = new Array(
+    segments.length,
+  ).fill(null);
   segmentSnapshots[cursorSegmentIndex] = cursorSnapshot;
 
   for (let i = cursorSegmentIndex - 1; i >= 0; i -= 1) {
@@ -346,7 +383,11 @@ function buildMultilineInputSpan(terminal: Terminal, state: TerminalInputState):
 
   const indexToCellOffset: number[] = [];
 
-  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+  for (
+    let segmentIndex = 0;
+    segmentIndex < segments.length;
+    segmentIndex += 1
+  ) {
     const segment = segments[segmentIndex] ?? "";
     const snapshot = segmentSnapshots[segmentIndex];
     const valueOffset = segmentOffsets[segmentIndex] ?? 0;
@@ -358,7 +399,11 @@ function buildMultilineInputSpan(terminal: Terminal, state: TerminalInputState):
     for (let i = 0; i <= segment.length; i += 1) {
       const cellOffset = snapshot.stringIndexToCellOffset[matchIndex + i];
       if (cellOffset === undefined) return null;
-      indexToCellOffset[valueOffset + i] = toGlobalCellOffset(snapshot, cellOffset, terminal.cols);
+      indexToCellOffset[valueOffset + i] = toGlobalCellOffset(
+        snapshot,
+        cellOffset,
+        terminal.cols,
+      );
     }
   }
 
@@ -386,7 +431,10 @@ function buildMultilineInputSpan(terminal: Terminal, state: TerminalInputState):
   };
 }
 
-function buildInputSpanCacheKey(terminal: Terminal, state: TerminalInputState): string {
+function buildInputSpanCacheKey(
+  terminal: Terminal,
+  state: TerminalInputState,
+): string {
   const buffer = terminal.buffer.active;
   return [
     state.value,
@@ -398,7 +446,10 @@ function buildInputSpanCacheKey(terminal: Terminal, state: TerminalInputState): 
   ].join("\u0000");
 }
 
-function getCachedInputSpan(terminal: Terminal, state: TerminalInputState): InputSpan | null {
+function getCachedInputSpan(
+  terminal: Terminal,
+  state: TerminalInputState,
+): InputSpan | null {
   const key = buildInputSpanCacheKey(terminal, state);
   const cached = inputSpanCache.get(terminal);
   if (cached?.key === key) {
@@ -410,18 +461,26 @@ function getCachedInputSpan(terminal: Terminal, state: TerminalInputState): Inpu
   return span;
 }
 
-function resolveTrackedInputSpan(terminal: Terminal, state: TerminalInputState): InputSpan | null {
+function resolveTrackedInputSpan(
+  terminal: Terminal,
+  state: TerminalInputState,
+): InputSpan | null {
   if (!canResolveEnhancedGeometry(state)) return null;
 
   const buffer = terminal.buffer.active;
-  const cursorCellOffset = (buffer.baseY + buffer.cursorY) * terminal.cols + buffer.cursorX;
+  const cursorCellOffset =
+    (buffer.baseY + buffer.cursorY) * terminal.cols + buffer.cursorX;
 
   if (!state.multiline) {
     const snapshot = readLogicalLineSnapshot(terminal);
     if (!snapshot) return null;
 
     const spans = findSingleLineInputSpans(snapshot, state, terminal.cols);
-    return spans.find((span) => span.indexToCellOffset[state.cursor] === cursorCellOffset) ?? null;
+    return (
+      spans.find(
+        (span) => span.indexToCellOffset[state.cursor] === cursorCellOffset,
+      ) ?? null
+    );
   }
 
   const span = buildMultilineInputSpan(terminal, state);
@@ -456,7 +515,10 @@ export function getSelectedInputRange(
     return null;
   }
 
-  const start = cellOffsetToInputIndex(inputSpan.indexToCellOffset, selectionStart);
+  const start = cellOffsetToInputIndex(
+    inputSpan.indexToCellOffset,
+    selectionStart,
+  );
   const end = cellOffsetToInputIndex(inputSpan.indexToCellOffset, selectionEnd);
 
   if (start < 0 || end > state.value.length || end <= start) {
@@ -470,7 +532,9 @@ export function getMouseBufferPosition(
   terminal: Terminal,
   event: MouseEvent,
 ): InputClickPosition | null {
-  const screenEl = terminal.element?.querySelector(".xterm-screen") as HTMLElement | null;
+  const screenEl = terminal.element?.querySelector(
+    ".xterm-screen",
+  ) as HTMLElement | null;
   const core = (terminal as Terminal & XTermCoreWithRenderDimensions)._core;
   const cellWidth = core?._renderService?.dimensions?.css?.cell?.width ?? 0;
   const cellHeight = core?._renderService?.dimensions?.css?.cell?.height ?? 0;
@@ -511,7 +575,10 @@ export function getInputIndexAtBufferPosition(
     return position.y === inputSpan.endY ? state.value.length : null;
   }
 
-  const inputIndex = cellOffsetToInputIndex(inputSpan.indexToCellOffset, clickedCellOffset);
+  const inputIndex = cellOffsetToInputIndex(
+    inputSpan.indexToCellOffset,
+    clickedCellOffset,
+  );
   if (inputIndex < 0 || inputIndex > state.value.length) return null;
   return inputIndex;
 }

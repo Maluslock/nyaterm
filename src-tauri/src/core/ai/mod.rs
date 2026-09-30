@@ -22,7 +22,10 @@ pub use history::{
     append_ai_audit, clear_ai_history, delete_ai_session, get_ai_audit_logs, get_ai_messages,
     get_ai_sessions, rebind_ai_session,
 };
-pub use model::{list_model_names, list_model_names_for_settings};
+pub use model::{
+    list_model_names, list_model_names_for_settings, test_model_connection,
+    test_provider_connection,
+};
 pub(crate) use redaction::redact_sensitive_text;
 pub use stream::{cancel_chat_stream, start_chat_stream};
 pub(crate) use types::AiCaptureEvent;

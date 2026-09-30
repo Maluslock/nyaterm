@@ -10,6 +10,96 @@ export type ChangelogRelease = {
 
 const changelogReleasesEn: ChangelogRelease[] = [
   {
+    version: "[1.2.12] - 2026-09-29",
+    sections: [
+      {
+        title: "Added",
+        items: [
+          "**pane-focus:** Add focused-pane mode and native fullscreen shortcuts while keeping inactive panes mounted for fast restoration.",
+          "**conpty:** Bundle Microsoft ConPTY for Windows, verify it during packaging, expose its status/version in support information, and preserve it across portable updates.",
+          "**terminal:** Add command navigation and clear shortcuts, including fallback handling for SSH sessions and common interactive-shell quit commands.",
+          "**terminal:** Route raw binary input through terminal sessions and synchronized peers, including Telnet IAC escaping for application data.",
+          "**file-explorer:** Add terminal-oriented context actions for paths and directories, including opening a directory in a new terminal.",
+          "**import:** Add confirmation for backup restore and clarify source handling in the import dialog.",
+          "**ai:** Refactor provider and model settings to improve provider configuration, model discovery, and reasoning-effort metadata.",
+          "**terminal-gutter:** Track gutter layout per session and dynamically size the line-number column.",
+          "**terminal:** Add a shortcut for opening the new-session menu.",
+        ],
+      },
+      {
+        title: "Changed",
+        items: [
+          "**rdp-clipboard:** Negotiate file-transfer capability before advertising file clipboard formats and refine clipboard format handling.",
+          "**sftp:** Detect whether an interactive shell is available and prevent shell-command execution in SFTP-only sessions.",
+          "**terminal:** Track timestamps against lines actually written by the terminal so gutter timestamps stay aligned with output.",
+          "**ui:** Hide the empty-workspace logo when a custom background is active.",
+          "**quick-commands:** Parent categories now show only commands assigned directly to that category instead of including child-category commands.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "**terminal:** Make Clear All clear scrollback while preserving the active shell cursor/redraw behavior.",
+          "**zmodem:** Honor negotiated control-character escaping during uploads, improving transfers through nested SSH sessions and other control-sensitive paths.",
+          "**ai:** Allow keyless local provider discovery and preserve provider-default reasoning effort settings.",
+          "**terminal:** Restore SSH fallback command navigation and improve fallback detection for common interactive-shell quit commands.",
+          "**local-terminal:** Use the platform default shell when opening a local terminal.",
+          "**windows-7:** Prepare bundled ConPTY before the Win7 Cargo build so release builds can resolve the packaged backend correctly.",
+        ],
+      },
+      {
+        title: "Performance",
+        items: [
+          "**terminal:** Add output-pressure tracking and more efficient logical-line handling to reduce work during heavy output, long lines, and wrapped-line bursts.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "[1.2.11] - 2026-09-22",
+    sections: [
+      {
+        title: "Added",
+        items: [
+          "**serial:** Add drag-and-drop uploads for XMODEM, YMODEM, and ZMODEM transfers.",
+          "**auth:** Add reusable saved accounts with an independent password source for connection authentication.",
+          "**file-explorer:** Add an optional lazy-loading directory tree for large remote filesystems.",
+          "**ssh:** Add a host-fingerprint / known-hosts management interface.",
+          "**keys:** Allow copying the public key derived from a saved private key.",
+          "**sftp:** Add compatibility mode for servers that require more conservative SFTP session handling.",
+          "**file-explorer:** Add “upload folder contents” and rework SFTP copy, cut, and paste workflows.",
+          "**ui:** Add an OpenWrt connection icon.",
+        ],
+      },
+      {
+        title: "Changed",
+        items: [
+          "**assets:** Replace OS/accelerator filtering with tag-based asset filtering.",
+          "**tabs:** Keep file-document tabs grouped with their related session and choose a related tab more predictably when a document closes.",
+          "**cloud-sync:** Increase the default sync debounce to 60 seconds and avoid unnecessary remote validation when sync settings have not meaningfully changed.",
+          "**terminal:** Respect application lock state across terminal focus, refresh, keyboard input, and context-menu interactions.",
+        ],
+      },
+      {
+        title: "Fixed",
+        items: [
+          "**security-auth:** Invalidate cached plaintext credentials after saving or deleting secrets.",
+          "**terminal:** Fix local-terminal Ctrl+U behavior under IME input and allow WebAssembly/image-addon size reporting required by terminal image decoding.",
+          "**file-explorer:** Preserve tree focus while virtualizing large directory trees.",
+          "**updater:** Include the MCP sidecar in portable builds and avoid stale MCP backup collisions during updates.",
+          "**importer:** Tolerate unreadable WindTerm auto-login data instead of aborting the import.",
+          "**docker:** Support standalone Docker Compose v2 installations.",
+          "**known-hosts:** Stabilize known-hosts management actions.",
+          "**windows:** Guard local terminal creation on older Windows versions that do not support the required backend.",
+          "**ai:** Avoid UTF-8 truncation panics, prevent Agent commands from waiting indefinitely for interactive input, and restore the default Claude model when a request leaves it blank.",
+          "**telnet:** Cancel pending connection creation when a Telnet attempt is aborted.",
+          "**settings:** Fix production builds requiring two confirmation clicks before the settings window closes.",
+          "**activity-bar:** Hide the empty side area after all activity-bar items on that side are hidden.",
+        ],
+      },
+    ],
+  },
+  {
     version: '[1.2.10] - 2026-09-13',
     sections: [
       {
@@ -2165,6 +2255,96 @@ const changelogReleasesEn: ChangelogRelease[] = [
 ];
 
 const changelogReleasesZhCN: ChangelogRelease[] = [
+  {
+    version: "[1.2.12] - 2026-09-29",
+    sections: [
+      {
+        title: "新增",
+        items: [
+          "**pane-focus:** 新增 Pane 专注模式和原生全屏快捷键，非活动 Pane 保持挂载以便快速恢复。",
+          "**conpty:** Windows 集成随应用打包的 Microsoft ConPTY，在构建时校验，并在支持信息中显示状态/版本；便携版更新也会保留相关文件。",
+          "**terminal:** 新增命令导航与清屏快捷键，并为 SSH 会话和常见交互式程序退出命令补充回退处理。",
+          "**terminal:** 原始二进制输入可通过终端会话及同步会话发送，并为 Telnet 应用数据正确转义 IAC 字节。",
+          "**file-explorer:** 文件浏览器右键菜单新增面向终端的路径/目录操作，包括在新终端中打开目录。",
+          "**import:** 备份恢复新增确认提示，并重新梳理导入对话框的来源选择处理。",
+          "**ai:** 重构 AI Provider 与模型设置，改进 Provider 配置、模型发现和 reasoning effort 元数据处理。",
+          "**terminal-gutter:** Gutter 布局按会话跟踪，并根据行号动态调整列宽。",
+          "**terminal:** 新增打开“新建会话”菜单的快捷键。",
+        ],
+      },
+      {
+        title: "变更",
+        items: [
+          "**rdp-clipboard:** 仅在协商确认支持文件传输后公布文件剪贴板格式，并优化剪贴板格式处理。",
+          "**sftp:** 检测交互式 Shell 是否可用；SFTP-only 会话不再尝试执行 Shell 命令。",
+          "**terminal:** 时间戳改为跟踪终端实际写入的行，使 Gutter 时间戳与输出保持对应。",
+          "**ui:** 启用自定义背景时隐藏空白工作区中央 Logo。",
+          "**quick-commands:** 父分类现在仅显示直接归属于该分类的快捷命令，不再混入子分类命令。",
+        ],
+      },
+      {
+        title: "修复",
+        items: [
+          "**terminal:** “全部清除”现在会清空 scrollback，同时保留当前 Shell 光标位置和必要的重绘行为。",
+          "**zmodem:** 上传时遵循对端协商的控制字符转义策略，改善嵌套 SSH 等对控制字符敏感场景下的传输。",
+          "**ai:** 支持无 API Key 的本地 Provider 模型发现，并保留 Provider 默认 reasoning effort 设置。",
+          "**terminal:** 恢复 SSH 命令导航回退逻辑，并改进常见交互式程序退出命令的回退识别。",
+          "**local-terminal:** 打开本地终端时使用当前平台的默认 Shell。",
+          "**windows-7:** Win7 Cargo 构建前准备随包 ConPTY，确保发布构建能够正确解析打包后的后端。",
+        ],
+      },
+      {
+        title: "性能",
+        items: [
+          "**terminal:** 新增输出压力跟踪并优化逻辑行处理，减少大量输出、超长行和换行突发场景下的额外计算。",
+        ],
+      },
+    ],
+  },
+  {
+    version: "[1.2.11] - 2026-09-22",
+    sections: [
+      {
+        title: "新增",
+        items: [
+          "**serial:** XMODEM、YMODEM、ZMODEM 新增拖拽上传。",
+          "**auth:** 新增可复用的已保存账号，并支持独立的账号密码来源。",
+          "**file-explorer:** 新增可切换的懒加载目录树，改善大型远程文件系统的浏览体验。",
+          "**ssh:** 新增 SSH 主机指纹 / Known Hosts 管理界面。",
+          "**keys:** 支持从已保存私钥复制对应公钥。",
+          "**sftp:** 新增兼容模式，用于需要更保守 SFTP 会话处理方式的服务器。",
+          "**file-explorer:** 新增“上传文件夹内容”，并重做 SFTP 复制、剪切和粘贴流程。",
+          "**ui:** 新增 OpenWrt 连接图标。",
+        ],
+      },
+      {
+        title: "变更",
+        items: [
+          "**assets:** 资产视图移除 OS/加速器筛选，改为基于标签的筛选。",
+          "**tabs:** 文件文档标签优先与关联会话保持相邻，关闭文档时也会更稳定地切回相关标签。",
+          "**cloud-sync:** 默认同步防抖从 15 秒调整为 60 秒，并避免在同步设置没有实质变化时重复远端校验。",
+          "**terminal:** 应用锁定时，终端焦点恢复、刷新、键盘输入和右键菜单交互都会遵循锁定状态。",
+        ],
+      },
+      {
+        title: "修复",
+        items: [
+          "**security-auth:** 保存或删除 Secret 后立即失效已缓存的明文凭据。",
+          "**terminal:** 修复 IME 场景下本地终端 Ctrl+U，并补齐终端图片解码所需的 WebAssembly 与 image addon 尺寸报告处理。",
+          "**file-explorer:** 大目录树虚拟化时保持当前树焦点。",
+          "**updater:** 便携版包含 MCP sidecar，并避免更新时旧 MCP 备份文件冲突。",
+          "**importer:** WindTerm 自动登录数据无法读取时不再中断整个导入流程。",
+          "**docker:** 支持独立安装的 Docker Compose v2。",
+          "**known-hosts:** 修复 Known Hosts 管理操作的稳定性问题。",
+          "**windows:** 在不支持所需终端后端的旧版 Windows 上阻止错误创建本地终端。",
+          "**ai:** 避免截断 Agent 输出时触发 UTF-8 panic，防止 Agent 命令无限等待交互输入，并在模型请求为空时恢复 Claude 默认模型。",
+          "**telnet:** 中止 Telnet 连接时取消仍在进行中的连接创建。",
+          "**settings:** 修复生产构建中设置窗口需要点击两次确认才能关闭的问题。",
+          "**activity-bar:** 某一侧所有活动栏项目均隐藏后，不再保留空白侧栏区域。",
+        ],
+      },
+    ],
+  },
   {
     version: '[1.2.10] - 2026-09-13',
     sections: [

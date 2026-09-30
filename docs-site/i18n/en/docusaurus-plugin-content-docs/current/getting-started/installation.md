@@ -12,7 +12,7 @@ NyaTerm supports the following operating systems:
 - **macOS** 12+ (Intel & Apple Silicon)
 - **Linux** (Ubuntu 20.04+, Fedora 36+, Arch Linux, and similar distributions)
 
-Local Terminal on Windows depends on the system ConPTY API, so Windows 10 version 1809 (Build 17763) is the minimum supported release.
+Local Terminal prefers the Microsoft ConPTY bundled with NyaTerm and falls back to the system ConPTY if loading or creation fails. The system must still provide the ConPTY API, so Windows 10 version 1809 (Build 17763) is the minimum supported release. The About dialog's support information shows the backend actually used.
 
 ## Download and install
 
@@ -27,6 +27,8 @@ Visit the [Releases](https://github.com/nyakang/nyaterm/releases) page and downl
 | Linux | `.deb` / `.AppImage` |
 
 For the Windows portable edition, extract the zip and run `NyaTerm.exe`. **Help → Check Updates** uses the same Cloudflare R2 update manifest and download source as the installed edition. Tauri updater signatures are always verified before staging an update; when restarting, NyaTerm replaces the program files and preserves the complete `data/` folder.
+
+The first upgrade to a portable build with bundled ConPTY requires a manual download because older updaters cannot process the new `conpty/` directory. Replace the program files while keeping your existing `data/` directory. In-app updates work again after that upgrade.
 
 Direct downloads for the Windows portable edition:
 

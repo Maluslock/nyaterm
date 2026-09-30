@@ -50,8 +50,7 @@ impl TranscriptState {
             return Vec::new();
         }
 
-        let replayed =
-            replay_terminal_output(data, &self.output_buffer, self.output_cursor);
+        let replayed = replay_terminal_output(data, &self.output_buffer, self.output_cursor);
         self.output_buffer = replayed.tail;
         self.output_cursor = replayed.cursor;
 
@@ -72,11 +71,7 @@ impl TranscriptState {
         self.records.iter().cloned().collect()
     }
 
-    fn append_record(
-        &mut self,
-        kind: TranscriptEventKind,
-        data: String,
-    ) -> TranscriptRecord {
+    fn append_record(&mut self, kind: TranscriptEventKind, data: String) -> TranscriptRecord {
         let line_id = self.next_line_id;
         self.next_line_id = self.next_line_id.saturating_add(1);
         let record = TranscriptRecord::new(line_id, kind, data);
@@ -126,7 +121,9 @@ impl TranscriptState {
 
             if let Some(remainder) = line.strip_prefix(echo) {
                 self.submitted_line_echo = None;
-                let remainder = strip_one_leading_newline(remainder).trim_start().to_string();
+                let remainder = strip_one_leading_newline(remainder)
+                    .trim_start()
+                    .to_string();
                 if remainder.is_empty() {
                     return None;
                 }
@@ -183,9 +180,9 @@ impl RecordingRuntime {
             context: None,
             profile: None,
             size_rotation_index: 0,
-            daily_key: local_day_key(OffsetDateTime::now_local().unwrap_or_else(|_| {
-                OffsetDateTime::now_utc()
-            })),
+            daily_key: local_day_key(
+                OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+            ),
         }
     }
 
@@ -197,6 +194,13 @@ impl RecordingRuntime {
 struct SessionRecorder {
     transcript: Mutex<TranscriptState>,
     runtime: Mutex<RecordingRuntime>,
+    lifecycle: Mutex<ScopeLifecycle>,
+}
+
+#[derive(Default)]
+struct ScopeLifecycle {
+    active_sessions: HashSet<String>,
+    finalize_pending: bool,
 }
 
 impl SessionRecorder {
@@ -204,6 +208,7 @@ impl SessionRecorder {
         Self {
             transcript: Mutex::new(TranscriptState::new(memory_limit_bytes)),
             runtime: Mutex::new(RecordingRuntime::new()),
+            lifecycle: Mutex::new(ScopeLifecycle::default()),
         }
     }
 
@@ -223,7 +228,7 @@ enum WriterMessage {
 }
 
 struct RecordingStatusState {
-    session_id: String,
+    session_id: Mutex<String>,
     mode: RecordingMode,
     file_path: Mutex<String>,
     started_at: String,
@@ -238,7 +243,7 @@ struct RecordingStatusState {
 impl RecordingStatusState {
     fn new(session_id: String, mode: RecordingMode, file_path: PathBuf) -> Self {
         Self {
-            session_id,
+            session_id: Mutex::new(session_id),
             mode,
             file_path: Mutex::new(file_path.to_string_lossy().to_string()),
             started_at: chrono_timestamp(),
@@ -259,7 +264,7 @@ impl RecordingStatusState {
 
     fn snapshot(&self) -> RecordingStatus {
         RecordingStatus {
-            session_id: self.session_id.clone(),
+            session_id: lock_recover(&self.session_id).clone(),
             state: *lock_recover(&self.state),
             mode: self.mode,
             file_path: lock_recover(&self.file_path).clone(),
@@ -278,6 +283,11 @@ impl RecordingStatusState {
 
     fn set_file_path(&self, path: &Path) {
         *lock_recover(&self.file_path) = path.to_string_lossy().to_string();
+        self.emit();
+    }
+
+    fn set_session_id(&self, session_id: &str) {
+        *lock_recover(&self.session_id) = session_id.to_string();
         self.emit();
     }
 
@@ -341,7 +351,9 @@ impl RecordingSink {
                             );
                             continue;
                         }
-                        worker_status.written_bytes.fetch_add(len, Ordering::Relaxed);
+                        worker_status
+                            .written_bytes
+                            .fetch_add(len, Ordering::Relaxed);
                     }
                     WriterMessage::Rotate {
                         path,
@@ -392,7 +404,9 @@ impl RecordingSink {
                                     format!("Failed to write recording footer: {error}"),
                                 );
                             } else {
-                                worker_status.written_bytes.fetch_add(len, Ordering::Relaxed);
+                                worker_status
+                                    .written_bytes
+                                    .fetch_add(len, Ordering::Relaxed);
                             }
                         }
                         if let Err(error) = writer.flush() {

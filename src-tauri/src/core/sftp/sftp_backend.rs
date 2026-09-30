@@ -55,6 +55,7 @@ pub(crate) struct SftpBackend {
     pipeline_depth_override: Option<u32>,
     /// Retained probe session used by compatibility mode.
     compatibility_session: Option<Arc<CompatibilitySftpSession>>,
+    shell_available: bool,
 }
 
 #[derive(Default)]

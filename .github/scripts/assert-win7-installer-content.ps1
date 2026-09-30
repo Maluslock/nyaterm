@@ -54,4 +54,8 @@ if ($missing.Count -gt 0) {
   throw "Windows 7 offline installer is missing expected WebView2 fixed runtime payload entries:`n$($missing -join "`n")"
 }
 
+if ($listing -match '(?i)conpty\.dll|OpenConsole\.exe') {
+  throw "Windows 7 installer must not contain bundled ConPTY files: $resolvedInstaller"
+}
+
 Write-Host "Windows 7 offline installer contains the WebView2 fixed runtime payload: $resolvedInstaller"

@@ -11,6 +11,7 @@ import {
   type TerminalOutputDrainMode,
 } from "./terminalOutputDrain";
 import { TerminalOutputScheduler } from "./terminalOutputScheduling";
+import { TerminalOutputPressureTracker } from "./terminalOutputPressure";
 import type { HibernationPhase } from "./xterminalInternalTypes";
 import type { PerformanceMode } from "./xterminalTypes";
 
@@ -66,6 +67,8 @@ export function createXTerminalOutputController({
     sessionId,
     terminalGeneration,
   );
+  const pressureTracker = new TerminalOutputPressureTracker();
+  let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   const isAlternateScreenActive = () =>
     terminal.buffer.active.type === "alternate" ||
     alternateScreenTrackerRef.current.isAlternateScreenActive();
@@ -89,14 +92,33 @@ export function createXTerminalOutputController({
     (frameGateRef.current?.getHeldBytes() ?? 0);
 
   const getNonOverloadedPressureMode = (): PerformanceMode =>
-    getPendingOutputBytes() >=
-    XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
-      ? "strained"
-      : "normal";
+    pressureTracker.isStrained(getPendingOutputBytes()) ? "strained" : "normal";
 
   const refreshOutputPressureMode = () => {
     if (performanceModeRef.current === "overloaded") return;
-    setOutputPressureMode(getNonOverloadedPressureMode());
+    const mode = getNonOverloadedPressureMode();
+    setOutputPressureMode(mode);
+    if (recoveryTimer !== null) clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    if (mode === "strained") {
+      const delay = pressureTracker.getRecoveryDelayMs();
+      if (delay > 0) {
+        recoveryTimer = setTimeout(
+          refreshOutputPressureMode,
+          Math.ceil(delay) + 1,
+        );
+      }
+    }
+  };
+
+  const noteOutputPressure = (data: string, bytes: number) => {
+    pressureTracker.noteOutput(data, bytes);
+    refreshOutputPressureMode();
+  };
+
+  const disposeOutputPressure = () => {
+    if (recoveryTimer !== null) clearTimeout(recoveryTimer);
+    recoveryTimer = null;
   };
 
   const noteSkippedOutput = (count: number) => {
@@ -322,6 +344,8 @@ export function createXTerminalOutputController({
     frameGate,
     isAlternateScreenActive,
     noteSkippedOutput,
+    noteOutputPressure,
+    disposeOutputPressure,
     maybeRecoverPerformanceMode,
     refreshOutputPressureMode,
     updateOutputDrainMode,

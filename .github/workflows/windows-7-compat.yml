@@ -58,6 +58,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare official ConPTY package
+        run: pnpm prepare:conpty
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -70,3 +73,6 @@ jobs:
 
       - name: Build modern Windows target without bundle
         run: pnpm tauri build --target x86_64-pc-windows-msvc --no-bundle --ci
+
+      - name: Verify bundled ConPTY and system fallback
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --test conpty_backend

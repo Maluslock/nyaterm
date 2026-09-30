@@ -51,6 +51,8 @@ import {
   normalizeTerminalCommandInput,
   type SendSessionInputOptions,
   type SessionInputPreview,
+  sendSessionBinaryInput,
+  sendSessionBinaryInputWithSync,
   sendSessionInput,
   sendSessionInputWithSync,
 } from "@/lib/sessionInput";
@@ -81,6 +83,11 @@ import type { AiCaptureEvent } from "@/types/global";
 import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
+import {
+  CommandNavigation,
+  nextFallbackInteractiveState,
+  shouldRecordFallbackCommand,
+} from "./commandNavigation";
 import CredentialSuggestions from "./CredentialSuggestions";
 import { installRemoteColorOscGuard } from "./remoteColorOscGuard";
 import SyncActionOverlay from "./SyncActionOverlay";
@@ -94,6 +101,7 @@ import {
   TerminalResizeDeduper,
 } from "./terminalFitScheduler";
 import { installTerminalImageAddon } from "./terminalImageAddon";
+import { stampTerminalWrittenLines } from "./terminalLineTimestamps";
 import {
   getSelectedInputRange,
   type InputSelectionRange,
@@ -133,6 +141,7 @@ import {
   shouldBlockXTerminalData,
 } from "./xterminalKeyboardInput";
 import {
+  clearTerminalAll,
   markTerminalUserInput,
   registerTerminalUserInputMarker,
 } from "@/lib/terminalControlInput";
@@ -166,6 +175,8 @@ type SearchAddonWithLifecycle = SearchAddon & {
  * xterm.js terminal for a session. Handles OSC 133 shell integration (or fallback prompt
  * detection), fuzzy command history suggestions, and resize/fit. Key props: sessionId, active.
  */
+const MAX_WRAPPED_LINE_LOOKBACK_ROWS = 512;
+
 export default function XTerminal({
   sessionId,
   sessionName,
@@ -503,9 +514,12 @@ export default function XTerminal({
         }),
       );
       unlistenBag.add(
-        listen<SerialModemEventPayload>(`serial-modem-event-${sessionId}`, (event) => {
-          wake({ type: "serialModem", payload: event.payload });
-        }),
+        listen<SerialModemEventPayload>(
+          `serial-modem-event-${sessionId}`,
+          (event) => {
+            wake({ type: "serialModem", payload: event.payload });
+          },
+        ),
       );
       unlistenBag.add(
         listen<AiCaptureEvent>(`ai-capture-${sessionId}`, (event) => {
@@ -990,6 +1004,74 @@ export default function XTerminal({
 
     terminalRef.current = terminal;
     setTerminalInstance(terminal);
+
+    const commandNavigation = new CommandNavigation();
+    let fallbackInteractive = false;
+
+    const getAbsCursorLine = () => {
+      const buffer = terminal.buffer.active;
+      return buffer.baseY + buffer.cursorY;
+    };
+
+    // 目标行高亮：跳转 / 复制后短暂高亮对应的行，给用户视觉反馈
+    let highlightDecorations: { dispose: () => void }[] = [];
+    let highlightTimer: number | null = null;
+    const clearHighlightDecorations = () => {
+      for (const deco of highlightDecorations) deco.dispose();
+      highlightDecorations = [];
+      if (highlightTimer !== null) {
+        window.clearTimeout(highlightTimer);
+        highlightTimer = null;
+      }
+    };
+    const highlightLines = (lines: number[]) => {
+      clearHighlightDecorations();
+      if (lines.length === 0) return;
+      const buffer = terminal.buffer.active;
+      const cursorLine = buffer.baseY + buffer.cursorY;
+      for (const line of lines) {
+        const marker = terminal.registerMarker(line - cursorLine);
+        if (!marker) continue;
+        const deco = terminal.registerDecoration({
+          marker,
+          x: 0,
+          width: terminal.cols,
+          layer: "top",
+        });
+        if (!deco) {
+          marker.dispose();
+          continue;
+        }
+        deco.onRender((el) => {
+          el.style.backgroundColor = "rgba(100, 150, 255, 0.35)";
+          el.style.pointerEvents = "none";
+        });
+        highlightDecorations.push({
+          dispose: () => {
+            deco.dispose();
+            if (!marker.isDisposed) marker.dispose();
+          },
+        });
+      }
+      highlightTimer = window.setTimeout(() => {
+        clearHighlightDecorations();
+      }, 1800);
+    };
+
+    const navigateCommand = (direction: -1 | 1) => {
+      const target = commandNavigation.navigate(direction, getAbsCursorLine());
+      if (target !== null) {
+        terminal.scrollToLine(target);
+        highlightLines([target]);
+      }
+    };
+    const selectCommandBlock = () => {
+      const range = commandNavigation.select(getAbsCursorLine());
+      if (range) {
+        terminal.selectLines(range.start, range.end);
+        terminal.scrollToLine(range.start);
+      }
+    };
     fitAddonRef.current = fitAddon;
     inputStateRef.current = createTerminalInputState();
     credentialPromptBufferRef.current = "";
@@ -1113,11 +1195,11 @@ export default function XTerminal({
           origin,
         }).catch(() => {});
       }
-        return sendSessionInput(sessionId, data, {
-          preview: null,
-          registerSubmission: command,
+      return sendSessionInput(sessionId, data, {
+        preview: null,
+        registerSubmission: command,
         origin,
-        }).catch(() => {});
+      }).catch(() => {});
     };
 
     const canReconnectDisconnectedSession = () =>
@@ -1141,7 +1223,8 @@ export default function XTerminal({
     };
 
     const assertTemporaryConfigMatchesSessionType = () => {
-      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType()) return;
+      if (!temporaryConfigRef.current || temporaryConfigMatchesSessionType())
+        return;
       throw new Error("Temporary session config protocol mismatch");
     };
 
@@ -1196,7 +1279,9 @@ export default function XTerminal({
           if (connectionId) {
             return invoke<string>("create_ssh_session", {
               connectionId,
-              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+              startupCommand: buildStartupCommandPayload(
+                restoreCwdStartupCommand,
+              ),
             });
           }
           assertTemporaryConfigMatchesSessionType();
@@ -1204,12 +1289,16 @@ export default function XTerminal({
             const { protocol: _protocol, ...sshConfig } = temporaryConfig;
             return invoke<string>("create_temporary_ssh_session", {
               config: sshConfig,
-              startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+              startupCommand: buildStartupCommandPayload(
+                restoreCwdStartupCommand,
+              ),
             });
           }
           return invoke<string>("create_ssh_session", {
             connectionId,
-            startupCommand: buildStartupCommandPayload(restoreCwdStartupCommand),
+            startupCommand: buildStartupCommandPayload(
+              restoreCwdStartupCommand,
+            ),
           });
       }
     };
@@ -1607,6 +1696,10 @@ export default function XTerminal({
       syncSuggestionsWithInputState,
       lastSelectionRef,
       appLockedRef,
+      navigateCommand,
+      selectCommandBlock,
+      clearAll: () => clearAllRef.current(),
+      resetCommandNavigation: () => commandNavigation.reset(),
     });
 
     const blockedColorOscIds = new Set<number>();
@@ -1635,29 +1728,32 @@ export default function XTerminal({
     const oscDisposable = terminal.parser.registerOscHandler(133, (data) => {
       const si = shellIntegrationRef.current;
 
-      if (data.startsWith("A")) {
+      const phase = data.split(";", 1)[0];
+      if (phase === "A") {
         si.enabled = true;
         si.commandRunning = false;
+        commandNavigation.promptStart(terminal.registerMarker(0));
         return false;
       }
 
-      if (data.startsWith("B")) {
+      if (phase === "B") {
         si.enabled = true;
         si.commandRunning = false;
         resetCommandSuggestionSuppression();
         return false;
       }
 
-      if (data.startsWith("C")) {
+      if (phase === "C") {
         si.enabled = true;
         si.commandRunning = true;
+        commandNavigation.commandStart();
         inputStateRef.current = createTerminalInputState();
         resetCommandSuggestionSuppression();
         dismissSuggestions();
         return false;
       }
 
-      if (data.startsWith("D")) {
+      if (phase === "D") {
         si.enabled = true;
         si.commandRunning = false;
         resetCommandSuggestionSuppression();
@@ -1749,9 +1845,13 @@ export default function XTerminal({
 
     clearAllRef.current = () => {
       if (appLockedRef.current) return;
+      commandNavigation.clear();
+      clearHighlightDecorations();
       lineTimestampsRef.current = new Map();
       gutterLineOffsetRef.current = 0;
-      terminal.reset();
+      clearTerminalAll(terminal, {
+        shellRedraw: sessionTypeRef.current !== "Local" || !isWindows,
+      });
       focusTerminal();
       requestGutterRefresh();
     };
@@ -1811,22 +1911,14 @@ export default function XTerminal({
       if (!terminalAppSettingsRef.current?.terminal?.show_timestamps) return;
       if (terminal.buffer.active.type === "alternate") return;
 
-      const map = lineTimestampsRef.current;
-      const start = Math.min(from, to);
-      const end = Math.max(from, to);
-
-      for (let y = start; y <= end; y += 1) {
-        if (!map.has(y)) {
-          map.set(y, ts);
-        }
-      }
-
-      const keepFrom = Math.max(0, start - 3000);
-      for (const key of Array.from(map.keys())) {
-        if (key < keepFrom) {
-          map.delete(key);
-        }
-      }
+      stampTerminalWrittenLines(
+        lineTimestampsRef.current,
+        terminal,
+        gutterLineOffsetRef.current,
+        from,
+        to,
+        ts,
+      );
 
       if (performanceModeRef.current === "normal") {
         refreshGutter();
@@ -1844,7 +1936,10 @@ export default function XTerminal({
       const map = lineTimestampsRef.current;
 
       let startLine = cursorLine;
-      while (startLine > 0) {
+      while (
+        startLine > 0 &&
+        cursorLine - startLine < MAX_WRAPPED_LINE_LOOKBACK_ROWS
+      ) {
         const line = buf.getLine(startLine);
         if (line && !line.isWrapped) break;
         startLine -= 1;
@@ -1865,6 +1960,8 @@ export default function XTerminal({
       outputDrain,
       frameGate,
       noteSkippedOutput,
+      noteOutputPressure,
+      disposeOutputPressure,
       maybeRecoverPerformanceMode,
       refreshOutputPressureMode,
       updateOutputDrainMode,
@@ -2024,7 +2121,10 @@ export default function XTerminal({
           case "serialModem":
             if (event.payload.type === "progress") {
               zmodemActiveRef.current = true;
-            } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+            } else if (
+              event.payload.type === "complete" ||
+              event.payload.type === "failed"
+            ) {
               zmodemActiveRef.current = false;
             }
             serialModemHandler.handle(event.payload);
@@ -2115,6 +2215,7 @@ export default function XTerminal({
       enterDisconnectedState,
       enterDisconnectedStateIfAttachSessionMissing,
       noteSkippedOutput,
+      noteOutputPressure,
       noteOutputActivity,
       updateCredentialPromptInputMode,
       feedCredentialOutput,
@@ -2263,6 +2364,15 @@ export default function XTerminal({
         return;
       }
 
+      if (data === "\x04" && fallbackInteractive) {
+        fallbackInteractive = nextFallbackInteractiveState(
+          fallbackInteractive,
+          data,
+          "",
+        );
+        inputStateRef.current = createTerminalInputState();
+      }
+
       if (
         canShowCommandSuggestions() &&
         showSuggestionsRef.current &&
@@ -2337,6 +2447,41 @@ export default function XTerminal({
       if (data === "\r") {
         refreshCommandLineTimestamp();
       }
+      if (
+        data === "\r" &&
+        shouldRecordFallbackCommand({
+          command,
+          sessionType: sessionTypeRef.current,
+          shellIntegrationEnabled: shellIntegrationRef.current.enabled,
+          bufferType: terminal.buffer.active.type,
+          disconnected: disconnectedRef.current,
+          aiCapturing: aiCapturingRef.current,
+          credentialPrompt: isCredentialPromptInputMode(),
+          interactive:
+            fallbackInteractive || commandSuggestionSuppressedRef.current,
+        })
+      ) {
+        const buffer = terminal.buffer.active;
+        const cursorLine = buffer.baseY + buffer.cursorY;
+        let startLine = cursorLine;
+        while (
+          startLine > 0 &&
+          cursorLine - startLine < MAX_WRAPPED_LINE_LOOKBACK_ROWS &&
+          buffer.getLine(startLine)?.isWrapped
+        )
+          startLine--;
+        if (!buffer.getLine(startLine)?.isWrapped) {
+          const marker = terminal.registerMarker(startLine - cursorLine);
+          if (marker) commandNavigation.add(marker);
+        }
+      }
+      if (data === "\r" && command && !shellIntegrationRef.current.enabled) {
+        fallbackInteractive = nextFallbackInteractiveState(
+          fallbackInteractive,
+          data,
+          command,
+        );
+      }
       inputStateRef.current = applyTerminalInputData(
         inputStateRef.current,
         data,
@@ -2356,6 +2501,21 @@ export default function XTerminal({
         syncSuggestionsWithInputState();
       }
       sendRawInput(data, data === "\r" && command ? command : null);
+    });
+
+    const binaryDisposable = terminal.onBinary((data) => {
+      if (shouldBlockXTerminalData(appLockedRef.current, "keyboard")) return;
+      if (aiCapturingRef.current) return;
+      if (hibernationPhaseRef.current !== "idle") {
+        requestWake("input");
+      }
+      if (disconnectedRef.current) return;
+      const peers = syncPeerSessionIdsRef.current;
+      void (
+        peers?.length
+          ? sendSessionBinaryInputWithSync(sessionIdRef.current, data, peers)
+          : sendSessionBinaryInput(sessionIdRef.current, data)
+      ).catch(() => {});
     });
 
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
@@ -2380,6 +2540,22 @@ export default function XTerminal({
     observer.observe(containerRef.current);
 
     const containerEl = containerRef.current;
+
+    const handleTerminalPointerDown = () => {
+      commandNavigation.reset();
+    };
+    containerEl.addEventListener(
+      "pointerdown",
+      handleTerminalPointerDown,
+      true,
+    );
+
+    const commandSelectionChangeDisposable = terminal.onSelectionChange(() => {
+      if (!terminal.hasSelection()) {
+        commandNavigation.resetSelection();
+      }
+    });
+
     const selectionController = installXTerminalSelectionController({
       terminal,
       containerEl,
@@ -2472,6 +2648,14 @@ export default function XTerminal({
       clearCredentialPromptInputMode();
       shellIntegrationRef.current.enabled = false;
       shellIntegrationRef.current.commandRunning = false;
+      commandNavigation.clear();
+      clearHighlightDecorations();
+      containerEl.removeEventListener(
+        "pointerdown",
+        handleTerminalPointerDown,
+        true,
+      );
+      commandSelectionChangeDisposable.dispose();
       replaceInputCommandRef.current = null;
       pasteTextRef.current = () => {};
       resetCredentialAutofill();
@@ -2503,6 +2687,7 @@ export default function XTerminal({
       clipboardOscDisposable.dispose();
       writeParsedDisposable.dispose();
       dataDisposable.dispose();
+      binaryDisposable.dispose();
       resizeDisposable.dispose();
       scrollDisposable.dispose();
       for (const disposable of searchLifecycleDisposables) {
@@ -2520,6 +2705,7 @@ export default function XTerminal({
         fitSchedulerRef.current = null;
       }
       sessionEvents.dispose();
+      disposeOutputPressure();
       zmodemHandler.dispose();
       serialModemHandler.dispose();
       frameGate.dispose({ ackRemaining: true, reason: "terminal_cleanup" });
@@ -2601,16 +2787,10 @@ export default function XTerminal({
     terminalReady,
     performanceMode,
   });
-  useKeywordHighlighter(
-    terminalInstance,
-    terminalSettings,
-    sessionId,
-    isDark,
-    {
-      suspended: keywordHighlighterSuspended,
-      releaseCachesAfterDelay: !visible || hibernated,
-    },
-  );
+  useKeywordHighlighter(terminalInstance, terminalSettings, sessionId, isDark, {
+    suspended: keywordHighlighterSuspended,
+    releaseCachesAfterDelay: !visible || hibernated,
+  });
 
   const { tooltipState, menuState, closeMenu } = useActionLinks(
     terminalInstance,

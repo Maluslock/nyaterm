@@ -379,6 +379,17 @@ export function getQuickCommandCategoryDirectCounts(commands: QuickCommand[]) {
   return counts;
 }
 
+export function filterQuickCommandsByCategory(
+  commands: QuickCommand[],
+  selectedCategory: string,
+) {
+  if (selectedCategory === "all") return commands;
+  if (selectedCategory === "uncategorized") {
+    return commands.filter((command) => !command.category_id);
+  }
+  return commands.filter((command) => command.category_id === selectedCategory);
+}
+
 export function getQuickCommandUncategorizedCount(commands: QuickCommand[]) {
   return commands.filter((command) => !command.category_id).length;
 }

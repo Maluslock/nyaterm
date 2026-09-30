@@ -437,6 +437,7 @@ export default function TerminalContextMenu({
           <ContextMenuItem onClick={doClearAll}>
             <MdDeleteSweep className="text-[0.875rem] text-muted-foreground mr-2" />
             {t("terminalCtx.clearAll")}
+            <ContextMenuShortcut>{dk("terminal.clearAll")}</ContextMenuShortcut>
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuSub>

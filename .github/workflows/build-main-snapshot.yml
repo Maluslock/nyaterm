@@ -207,6 +207,24 @@ jobs:
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
+      - name: Verify Windows installer contains ConPTY
+        if: matrix.os_name == 'windows'
+        shell: pwsh
+        run: |
+          if (!(Get-Command 7z.exe -ErrorAction SilentlyContinue) -and
+              !(Test-Path (Join-Path $env:ProgramFiles "7-Zip/7z.exe"))) {
+            choco install 7zip -y --no-progress
+          }
+          $releaseDir = if ("${{ matrix.target }}" -eq "aarch64-pc-windows-msvc") {
+            "src-tauri/target/aarch64-pc-windows-msvc/release"
+          } else {
+            "src-tauri/target/release"
+          }
+          $installer = Get-ChildItem (Join-Path $releaseDir "bundle/nsis") -Filter "*.exe" |
+            Select-Object -First 1
+          if ($null -eq $installer) { throw "Missing NSIS installer" }
+          ./.github/scripts/assert-conpty-package.ps1 -InstallerPath $installer.FullName
+
       - name: Collect macOS assets
         if: matrix.os_name == 'macos'
         shell: bash
@@ -317,10 +335,13 @@ jobs:
           New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
           Copy-Item -LiteralPath $exe -Destination (Join-Path $portableDir "NyaTerm.exe")
           Copy-Item -LiteralPath $sidecar -Destination (Join-Path $portableDir "nyaterm-mcp.exe")
+          Copy-Item -LiteralPath "src-tauri/resources/windows/conpty" -Destination $portableDir -Recurse
+          Copy-Item -LiteralPath "src-tauri/conpty-license/LICENSE.txt" -Destination (Join-Path $portableDir "conpty/LICENSE.txt")
           New-Item -ItemType File -Path (Join-Path $portableDir "portable.flag") -Force | Out-Null
           New-Item -ItemType File -Path (Join-Path $dataDir ".keep") -Force | Out-Null
 
           Compress-Archive -Path $portableDir -DestinationPath $portableZip -Force
+          ./.github/scripts/assert-conpty-package.ps1 -PortableZipPath $portableZip
 
           Get-ChildItem -Path "dist-release" -File | ForEach-Object {
             Write-Host $_.FullName

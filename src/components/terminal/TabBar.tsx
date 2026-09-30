@@ -5,12 +5,14 @@ import {
   memo,
   type PointerEvent,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type WheelEvent,
 } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
@@ -30,6 +32,8 @@ import { toast } from "sonner";
 import CloseAllSessionsDialog from "@/components/dialog/terminal/CloseAllSessionsDialog";
 import TabRenameDialog from "@/components/dialog/terminal/TabRenameDialog";
 import TabStartupCommandDialog from "@/components/dialog/terminal/TabStartupCommandDialog";
+import { HOTKEY_OPTIONS } from "@/hooks/useGlobalShortcuts";
+import { resolveShortcutKeys } from "@/hooks/useShortcutMap";
 import { hasMatchingTemporaryConfig } from "@/lib/appWorkspace";
 import { useFileDocumentStates } from "@/lib/fileDocumentRegistry";
 import type { TabMouseAction } from "@/lib/interactionSettings";
@@ -357,6 +361,7 @@ function TabBar({
   const [renameTab, setRenameTab] = useState<Tab | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [closeAllDialogOpen, setCloseAllDialogOpen] = useState(false);
+  const [newSessionMenuOpen, setNewSessionMenuOpen] = useState(false);
   const [closingAllSessions, setClosingAllSessions] = useState(false);
   const [commandDialog, setCommandDialog] = useState<{
     tab: Tab;
@@ -380,6 +385,17 @@ function TabBar({
   const [tabStripScroll, setTabStripScroll] = useState({
     hasOverflow: false,
   });
+
+  const isFocusedTabBar = tabs.some((tab) => tab.id === focusedTabId);
+  useEffect(() => {
+    if (!isFocusedTabBar) setNewSessionMenuOpen(false);
+  }, [isFocusedTabBar]);
+  useHotkeys(
+    resolveShortcutKeys("tab.openNewSessionMenu", appSettings.keybindings),
+    () => setNewSessionMenuOpen(true),
+    { ...HOTKEY_OPTIONS, enabled: isFocusedTabBar },
+    [isFocusedTabBar],
+  );
 
   const groupsById = useMemo(
     () => new Map(savedGroups.map((group) => [group.id, group])),
@@ -1752,11 +1768,12 @@ function TabBar({
           </DropdownMenu>
         )}
 
-        <DropdownMenu>
+        <DropdownMenu open={newSessionMenuOpen} onOpenChange={setNewSessionMenuOpen}>
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
                 <button
+                  type="button"
                   className="flex h-full w-9 shrink-0 items-center justify-center border-l transition-colors df-hover"
                   style={{
                     color: "var(--df-text-muted)",

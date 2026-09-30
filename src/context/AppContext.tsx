@@ -22,6 +22,7 @@ export type PaneConnectingUpdates = Partial<Pick<SessionPane, "name" | "type" | 
 
 export interface PendingTabCreation {
   tabId: string;
+  paneId: string;
   createRequestId: string;
 }
 

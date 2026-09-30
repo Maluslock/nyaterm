@@ -25,6 +25,17 @@ pub fn test_header_write(
     assert_eq!(port, expected);
 }
 
+#[test]
+fn test_header_write_with_escape_control_round_trips_binary_flags() {
+    let header = Header::new(Encoding::ZBIN32, Frame::ZDATA, &[b'\n', 0x1b, 0x80, 0x9f]);
+    let mut wire = Vec::new();
+    header.write_with_escape_control(&mut wire, true).unwrap();
+
+    assert!(wire.windows(2).any(|pair| pair == [ZDLE, b'J']));
+    let mut reader = &wire[2..];
+    assert!(Header::read(&mut reader).unwrap() == Some(header));
+}
+
 #[rstest]
 #[case(&[Encoding::ZHEX as u8, b'0', b'1', b'0', b'1', b'0', b'2', b'0', b'3', b'0', b'4', b'a', b'7', b'5', b'2'], Encoding::ZHEX, Frame::ZRINIT, &[0x1, 0x2, 0x3, 0x4])]
 #[case(&[Encoding::ZBIN as u8, Frame::ZRINIT as u8, 0xa, 0xb, 0xc, 0xd, 0xa6, 0xcb], Encoding::ZBIN, Frame::ZRINIT, &[0xa, 0xb, 0xc, 0xd])]
@@ -176,6 +187,73 @@ fn test_sender_requests_8k_file_chunks_after_large_zrinit() {
     let request = sender.poll_file().expect("file data request");
     assert_eq!(request.offset, 0);
     assert_eq!(request.len, 8 * 1024);
+}
+
+fn sender_file_wire_with_zrinit_flags(first_caps: Zrinit, second_caps: Option<Zrinit>) -> Vec<u8> {
+    let mut sender = Sender::new().unwrap();
+    sender.start_file(b"escape.bin", 3).unwrap();
+    sender.advance_outgoing(sender.drain_outgoing().len());
+
+    sender
+        .feed_incoming(&write_zrinit(&[0, 0, 0, first_caps.bits()]))
+        .unwrap();
+    sender.advance_outgoing(sender.drain_outgoing().len());
+
+    if let Some(caps) = second_caps {
+        sender
+            .feed_incoming(&write_zrinit(&[0, 0, 0, caps.bits()]))
+            .unwrap();
+    }
+    sender.feed_incoming(&write_zrpos(0)).unwrap();
+    assert_eq!(sender.poll_file().unwrap().offset, 0);
+    sender.feed_file(b"\n~.").unwrap();
+    sender.drain_outgoing().to_vec()
+}
+
+#[test]
+fn test_sender_preserves_unescaped_lf_without_escctl() {
+    let wire = sender_file_wire_with_zrinit_flags(
+        Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32,
+        None,
+    );
+    assert!(wire.windows(3).any(|bytes| bytes == b"\n~."));
+}
+
+#[test]
+fn test_sender_escapes_control_characters_when_zrinit_requests_escctl() {
+    let wire = sender_file_wire_with_zrinit_flags(
+        Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32 | Zrinit::ESCCTL,
+        None,
+    );
+    assert!(!wire.windows(3).any(|bytes| bytes == b"\n~."));
+    assert!(wire.windows(2).any(|bytes| bytes == [ZDLE, b'J']));
+}
+
+#[test]
+fn test_sender_keeps_escctl_after_later_zrinit_omits_it() {
+    let caps = Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32;
+    let wire = sender_file_wire_with_zrinit_flags(caps | Zrinit::ESCCTL, Some(caps));
+    assert!(!wire.windows(3).any(|bytes| bytes == b"\n~."));
+    assert!(wire.windows(2).any(|bytes| bytes == [ZDLE, b'J']));
+}
+
+#[test]
+fn test_sender_escapes_full_8k_control_subpacket() {
+    let mut sender = Sender::new().unwrap();
+    sender.start_file(b"control.bin", 8 * 1024).unwrap();
+    sender.advance_outgoing(sender.drain_outgoing().len());
+    sender
+        .feed_incoming(&write_zrinit(&[0, 0, 0, Zrinit::ESCCTL.bits()]))
+        .unwrap();
+    sender.advance_outgoing(sender.drain_outgoing().len());
+    sender.feed_incoming(&write_zrpos(0)).unwrap();
+
+    let request = sender.poll_file().unwrap();
+    assert_eq!(request.len, 8 * 1024);
+    sender.feed_file(&vec![b'\n'; request.len]).unwrap();
+    let wire = sender.drain_outgoing();
+    assert!(wire.len() > 16 * 1024);
+    assert!(!wire.windows(2).any(|bytes| bytes == b"\n~"));
 }
 
 #[test]

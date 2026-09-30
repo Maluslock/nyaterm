@@ -234,6 +234,7 @@ impl SftpBackend {
         encoding: &str,
         pipeline_depth_override: Option<u32>,
         compatibility_mode: bool,
+        shell_available: bool,
         compatibility_config: SftpClientConfig,
     ) -> AppResult<Self> {
         tracing::debug!(
@@ -257,12 +258,18 @@ impl SftpBackend {
                 encoding,
                 pipeline_depth_override,
                 Some(Arc::new(CompatibilitySftpSession::new(core))),
+                shell_available,
             ));
         }
 
         let sftp = ManagedSftpSession::fresh(core, "probe");
         let _ = sftp.close().await;
-        Ok(Self::new(ssh_handle, encoding, pipeline_depth_override))
+        Ok(Self::new(
+            ssh_handle,
+            encoding,
+            pipeline_depth_override,
+            shell_available,
+        ))
     }
 
     pub(super) async fn open_sftp_core(
@@ -507,51 +514,75 @@ impl SftpBackend {
     }
 
     pub(super) async fn exec(&self, command: &str) -> AppResult<ExecResult> {
-        let handle_mtx = self.ssh_handle.target_handle();
-        let mut channel = {
-            let handle = handle_mtx.lock().await;
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|e| AppError::Channel(format!("Failed to open exec channel: {}", e)))?
-        };
-
-        channel.exec(true, command.as_bytes()).await?;
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let mut exit_code: Option<u32> = None;
-
-        loop {
-            match channel.wait().await {
-                Some(ChannelMsg::Data { data }) => {
-                    stdout.extend_from_slice(&data);
-                }
-                Some(ChannelMsg::ExtendedData { data, ext }) => {
-                    if ext == 1 {
-                        stderr.extend_from_slice(&data);
-                    }
-                }
-                Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    exit_code = Some(exit_status);
-                }
-                Some(ChannelMsg::Eof) | None => {
-                    if exit_code.is_none() {
-                        if let Some(ChannelMsg::ExitStatus { exit_status }) = channel.wait().await {
-                            exit_code = Some(exit_status);
-                        }
-                    }
-                    break;
-                }
-                _ => {}
-            }
+        if !self.shell_available {
+            return Err(AppError::Channel(
+                "Remote commands are unavailable for SFTP-only sessions".to_string(),
+            ));
         }
 
-        Ok(ExecResult {
-            exit_code: exit_code.unwrap_or(255),
-            stdout,
-            stderr,
+        match tokio::time::timeout(SFTP_EXEC_TIMEOUT, async {
+            let handle_mtx = self.ssh_handle.target_handle();
+            let mut channel = {
+                let handle = handle_mtx.lock().await;
+                handle
+                    .channel_open_session()
+                    .await
+                    .map_err(|e| AppError::Channel(format!("Failed to open exec channel: {}", e)))?
+            };
+
+            channel.exec(true, command.as_bytes()).await?;
+
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut exit_code: Option<u32> = None;
+
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        stdout.extend_from_slice(&data);
+                    }
+                    Some(ChannelMsg::ExtendedData { data, ext }) => {
+                        if ext == 1 {
+                            stderr.extend_from_slice(&data);
+                        }
+                    }
+                    Some(ChannelMsg::ExitStatus { exit_status }) => {
+                        exit_code = Some(exit_status);
+                    }
+                    Some(ChannelMsg::Eof) | None => {
+                        if exit_code.is_none() {
+                            if let Some(ChannelMsg::ExitStatus { exit_status }) =
+                                channel.wait().await
+                            {
+                                exit_code = Some(exit_status);
+                            }
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            Ok(ExecResult {
+                exit_code: exit_code.unwrap_or(255),
+                stdout,
+                stderr,
+            })
         })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = SFTP_EXEC_TIMEOUT.as_secs(),
+                    "Remote SFTP backend command timed out"
+                );
+                Err(AppError::Channel(format!(
+                    "Remote command timed out after {} seconds",
+                    SFTP_EXEC_TIMEOUT.as_secs()
+                )))
+            }
+        }
     }
 
     pub(super) async fn exec_ok(&self, command: &str) -> AppResult<Vec<u8>> {

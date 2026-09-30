@@ -24,7 +24,7 @@ function isInsideRemoteDesktopInputRoot(event: KeyboardEvent) {
   );
 }
 
-const HOTKEY_OPTIONS = {
+export const HOTKEY_OPTIONS = {
   enableOnFormTags: true,
   preventDefault: true,
   ignoreEventWhen: isInsideRemoteDesktopInputRoot,

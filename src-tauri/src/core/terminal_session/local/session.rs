@@ -1327,7 +1327,7 @@ fn pty_session_thread(
             SessionCommand::DetachRenderer => {
                 output.detach();
             }
-            SessionCommand::Write { data, origin, .. } => {
+            SessionCommand::Write { data, raw, origin, .. } => {
                 if input_cancels_startup_injection(origin)
                     && startup_input_barrier
                         .as_ref()
@@ -1353,7 +1353,7 @@ fn pty_session_thread(
                 if zmodem_input_blocked.load(Ordering::Acquire) {
                     continue;
                 }
-                let send_data = encode_terminal_input(&data, &encoding);
+                let send_data = prepare_terminal_write_input(data, &encoding, raw, false);
                 let write_started_at = Instant::now();
                 match write_to_pty(&mut *writer, &send_data) {
                     Ok(()) => {
@@ -1514,7 +1514,7 @@ fn pty_session_thread(
     output.close();
 
     if let Some(ref rec) = recording_mgr {
-        rec.cleanup_session(&session_id);
+        rec.disconnect_session(&session_id);
     }
 
     rt_handle.block_on(async {

@@ -44,6 +44,65 @@ export function carryOverSessionCwd(fromSessionId: string, toSessionId: string) 
 /** C0 controls, DEL, and C1 controls — never replayed as terminal input. */
 const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/;
 
+export type DirectoryShell = "posix" | "powershell" | "cmd";
+
+export function isTerminalDirectoryPath(path: string): boolean {
+  return !!path.trim() && !CONTROL_CHARS.test(path);
+}
+
+export function getDirectoryShell(shellPath: string | undefined, windows: boolean): DirectoryShell | null {
+  if (!windows) return "posix";
+  const executable = (shellPath ?? "")
+    .split(/[\\/]/)
+    .pop()
+    ?.trim()
+    .split(/[\s"']/)[0]
+    ?.toLowerCase() ?? "";
+  if (executable === "cmd" || executable === "cmd.exe") return "cmd";
+  if (
+    executable === "bash" ||
+    executable === "bash.exe" ||
+    executable === "sh" ||
+    executable === "sh.exe" ||
+    executable === "zsh" ||
+    executable === "zsh.exe"
+  )
+    return "posix";
+  if (
+    !executable ||
+    executable === "powershell" ||
+    executable === "powershell.exe" ||
+    executable === "pwsh" ||
+    executable === "pwsh.exe"
+  )
+    return "powershell";
+  return null;
+}
+
+export function buildDirectoryChangeCommand(
+  path: string,
+  shell: DirectoryShell,
+  windowsPosix = false,
+): string | null {
+  if (!isTerminalDirectoryPath(path)) return null;
+  switch (shell) {
+    case "powershell":
+      return `Set-Location -LiteralPath '${path.replace(/'/g, "''")}'`;
+    case "cmd":
+      // cmd expands variables even inside quotes. Reject these paths instead of executing altered input.
+      if (/["%!]/.test(path)) return null;
+      return `cd /d "${path}"`;
+    default: {
+      const posixPath = windowsPosix
+        ? path
+            .replace(/^([a-zA-Z]):[\\/]/, (_, drive: string) => `/${drive.toLowerCase()}/`)
+            .replace(/\\/g, "/")
+        : path;
+      return `cd '${posixPath.replace(/'/g, "'\\''")}'`;
+    }
+  }
+}
+
 /**
  * Builds a `cd '<path>'` command for the given cwd. The payload may arrive
  * percent-encoded (legacy OSC 7 shell integrations) or raw (NyaTerm's own
@@ -62,8 +121,7 @@ export function buildReconnectCwdCommand(cwd: string) {
   } catch {
     // Malformed percent sequence: treat the payload as a raw path.
   }
-  if (!decoded.trim() || CONTROL_CHARS.test(decoded)) return null;
-  return `cd '${decoded.replace(/'/g, "'\\''")}'`;
+  return buildDirectoryChangeCommand(decoded, "posix");
 }
 
 /**

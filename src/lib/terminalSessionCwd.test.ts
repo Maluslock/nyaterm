@@ -1,11 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDirectoryChangeCommand,
   buildReconnectCwdCommand,
   buildReconnectCwdStartupCommand,
   carryOverSessionCwd,
   getSessionCwd,
+  getDirectoryShell,
   recordSessionCwd,
 } from "./terminalSessionCwd";
+
+describe("directory terminal commands", () => {
+  it("escapes POSIX paths and rejects control characters", () => {
+    expect(buildDirectoryChangeCommand("/tmp/O'Brien & sons", "posix")).toBe(
+      "cd '/tmp/O'\\''Brien & sons'",
+    );
+    expect(buildDirectoryChangeCommand("/tmp/x\nwhoami", "posix")).toBeNull();
+  });
+
+  it("uses literal PowerShell paths with doubled apostrophes", () => {
+    expect(buildDirectoryChangeCommand("C:\\Work\\O'Brien $x", "powershell")).toBe(
+      "Set-Location -LiteralPath 'C:\\Work\\O''Brien $x'",
+    );
+  });
+
+  it("switches drives in cmd and rejects expansion characters", () => {
+    expect(buildDirectoryChangeCommand("D:\\My Files\\O'Brien & sons", "cmd")).toBe(
+      'cd /d "D:\\My Files\\O\'Brien & sons"',
+    );
+    expect(buildDirectoryChangeCommand("D:\\%TEMP%", "cmd")).toBeNull();
+    expect(buildDirectoryChangeCommand("D:\\!TEMP!", "cmd")).toBeNull();
+  });
+
+  it("selects the actual local shell", () => {
+    expect(getDirectoryShell("C:\\Windows\\System32\\cmd.exe", true)).toBe("cmd");
+    expect(getDirectoryShell("C:\\Program Files\\Git\\bin\\bash.exe", true)).toBe("posix");
+    expect(getDirectoryShell('"C:\\Program Files\\Git\\bin\\bash.exe" -l', true)).toBe("posix");
+    expect(getDirectoryShell(undefined, true)).toBe("powershell");
+    expect(getDirectoryShell("nu.exe", true)).toBeNull();
+  });
+
+  it("translates Windows paths for local Git Bash", () => {
+    expect(buildDirectoryChangeCommand("C:\\My Files\\O'Brien", "posix", true)).toBe(
+      "cd '/c/My Files/O'\\''Brien'",
+    );
+  });
+});
 
 describe("buildReconnectCwdCommand", () => {
   it("returns null for an empty string", () => {
@@ -65,9 +104,7 @@ describe("buildReconnectCwdCommand", () => {
   });
 
   it("decodes percent-encoded unicode paths before replay", () => {
-    expect(buildReconnectCwdCommand("/home/%E7%94%A8%E6%88%B7")).toBe(
-      "cd '/home/用户'",
-    );
+    expect(buildReconnectCwdCommand("/home/%E7%94%A8%E6%88%B7")).toBe("cd '/home/用户'");
   });
 
   it("keeps a raw path when a percent sequence is malformed", () => {
@@ -77,9 +114,7 @@ describe("buildReconnectCwdCommand", () => {
 
   it("preserves literal percent sequences from the NyaTerm emitter", () => {
     expect(buildReconnectCwdCommand("/opt/100%25")).toBe("cd '/opt/100%'");
-    expect(buildReconnectCwdCommand("/opt/my%2520dir")).toBe(
-      "cd '/opt/my%20dir'",
-    );
+    expect(buildReconnectCwdCommand("/opt/my%2520dir")).toBe("cd '/opt/my%20dir'");
   });
 
   it("returns null when decoding leaves a blank value", () => {
@@ -87,9 +122,7 @@ describe("buildReconnectCwdCommand", () => {
   });
 
   it("escapes quotes revealed by percent-decoding", () => {
-    expect(buildReconnectCwdCommand("/home/o%27brien")).toBe(
-      "cd '/home/o'\\''brien'",
-    );
+    expect(buildReconnectCwdCommand("/home/o%27brien")).toBe("cd '/home/o'\\''brien'");
   });
 
   it("returns null for control characters revealed by percent-decoding", () => {

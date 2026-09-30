@@ -13,7 +13,9 @@ use crate::core::session::{
     StartupInjectionAttempt, StartupInputBarrier, session_command_channel,
 };
 use crate::core::ssh::osc::{CwdPayloadEvent, OscStripper, build_ready_marker};
-use crate::core::terminal_session::{TerminalOutputDecoder, encode_terminal_input};
+use crate::core::terminal_session::{
+    TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
+};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
     start_zmodem_transfer,

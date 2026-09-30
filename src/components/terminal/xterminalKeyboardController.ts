@@ -69,6 +69,10 @@ interface InstallXTerminalKeyboardControllerParams {
   ) => void;
   syncSuggestionsWithInputState: () => void;
   lastSelectionRef: MutableRef<string>;
+  navigateCommand: (direction: -1 | 1) => void;
+  selectCommandBlock: () => void;
+  clearAll: () => void;
+  resetCommandNavigation: () => void;
 }
 
 export function installXTerminalKeyboardController({
@@ -101,6 +105,10 @@ export function installXTerminalKeyboardController({
   replaceInputSelection,
   syncSuggestionsWithInputState,
   lastSelectionRef,
+  navigateCommand,
+  selectCommandBlock,
+  clearAll,
+  resetCommandNavigation,
 }: InstallXTerminalKeyboardControllerParams) {
   const inputFromKeyboardController = (data: string) => {
     markTerminalUserInput(terminal);
@@ -207,6 +215,51 @@ export function installXTerminalKeyboardController({
       e.preventDefault();
       terminal.selectAll();
       return false;
+    }
+
+    if (!e.isComposing && e.keyCode !== 229) {
+      if (
+        matchesKeyEvent(resolveShortcutKeys("terminal.commandNav.prev", kb), e)
+      ) {
+        e.preventDefault();
+        navigateCommand(-1);
+        return false;
+      }
+      if (
+        matchesKeyEvent(resolveShortcutKeys("terminal.commandNav.next", kb), e)
+      ) {
+        e.preventDefault();
+        navigateCommand(1);
+        return false;
+      }
+      if (
+        matchesKeyEvent(
+          resolveShortcutKeys("terminal.commandNav.select", kb),
+          e,
+        )
+      ) {
+        e.preventDefault();
+        selectCommandBlock();
+        return false;
+      }
+      if (matchesKeyEvent(resolveShortcutKeys("terminal.clearAll", kb), e)) {
+        e.preventDefault();
+        clearAll();
+        return false;
+      }
+    }
+
+    if (
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown")
+    ) {
+      resetCommandNavigation();
     }
 
     // Plain Cmd+C: when the application has enabled keyboard reporting modes
@@ -553,6 +606,7 @@ export function installXTerminalKeyboardController({
 
     const swallowIds = [
       "tab.newSession",
+      "tab.openNewSessionMenu",
       "tab.close",
       "tab.next",
       "tab.prev",

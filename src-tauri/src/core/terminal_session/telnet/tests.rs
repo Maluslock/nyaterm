@@ -4,7 +4,7 @@ mod tests {
         DO, IAC, OPT_NAWS, OPT_SUPPRESS_GO_AHEAD, TelnetEnterMode, TelnetLineEditor,
         TelnetAutoLogin, TelnetAutoLoginAction, TelnetAutoLoginConfig,
         TelnetAutoLoginCredentials, TelnetSessionConfig, WILL, maybe_build_naws,
-        await_telnet_connection, negotiate_response, normalize_enter_bytes, split_write_chunks,
+        await_telnet_connection, escape_telnet_application_data, negotiate_response, normalize_enter_bytes, split_write_chunks,
         strip_telnet_commands,
     };
     use crate::error::AppError;
@@ -82,6 +82,19 @@ mod tests {
             });
         }
         assert!(responses.is_empty());
+    }
+
+    #[test]
+    fn binary_input_escapes_iac_only_for_telnet_transport() {
+        let mouse_report = b"\x1b[M \xff\x80";
+        assert_eq!(
+            escape_telnet_application_data(mouse_report, false),
+            b"\x1b[M \xff\xff\x80"
+        );
+        assert_eq!(
+            escape_telnet_application_data(mouse_report, true),
+            mouse_report
+        );
     }
 
     #[test]

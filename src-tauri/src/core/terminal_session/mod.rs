@@ -4,6 +4,7 @@ pub(crate) mod local;
 pub(crate) mod serial;
 pub(crate) mod telnet;
 
+use crate::core::input::remap_del_to_bs;
 use encoding_rs::{CoderResult, Decoder, Encoding, UTF_8};
 
 pub(crate) fn terminal_encoding(label: &str) -> &'static Encoding {
@@ -88,6 +89,21 @@ pub(crate) fn encode_terminal_input(data: &[u8], encoding: &str) -> Vec<u8> {
     result
 }
 
+pub(crate) fn prepare_terminal_write_input(
+    mut data: Vec<u8>,
+    encoding: &str,
+    raw: bool,
+    backspace_as_bs: bool,
+) -> Vec<u8> {
+    if raw {
+        return data;
+    }
+    if backspace_as_bs {
+        remap_del_to_bs(&mut data);
+    }
+    encode_terminal_input(&data, encoding)
+}
+
 fn ansi_sequence_end(data: &[u8], start: usize) -> usize {
     let mut i = start + 1;
     if i >= data.len() {
@@ -111,7 +127,20 @@ fn ansi_sequence_end(data: &[u8], start: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalOutputDecoder, encode_terminal_input};
+    use super::{TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input};
+
+    #[test]
+    fn write_input_encodes_text_but_preserves_raw_bytes_and_del() {
+        assert_eq!(
+            prepare_terminal_write_input("测\u{7f}".as_bytes().to_vec(), "GBK", false, true),
+            vec![0xB2, 0xE2, 0x08]
+        );
+        let raw = vec![0x1b, b'[', b'M', b' ', 0x80, 0xff, 0x7f];
+        assert_eq!(
+            prepare_terminal_write_input(raw.clone(), "GBK", true, true),
+            raw
+        );
+    }
 
     #[test]
     fn gbk_decoder_preserves_split_multibyte_character() {

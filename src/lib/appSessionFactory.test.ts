@@ -24,11 +24,13 @@ describe("SSH runtime mode creation", () => {
       createRequestId: "request-1",
       startupCommand: null,
       runtimeMode: "sftp",
+      recordingScopeId: undefined,
     });
   });
 
   it("reuses the pane runtime for reconnect and startup restoration", async () => {
     const pane = {
+      id: "pane-1",
       type: "SSH",
       connectionId: "ssh-1",
       sshRuntimeMode: "sftp",
@@ -41,6 +43,22 @@ describe("SSH runtime mode creation", () => {
       createRequestId: "request-2",
       startupCommand: null,
       runtimeMode: "sftp",
+      recordingScopeId: "pane-1",
+    });
+  });
+
+  it("passes an explicit directory to a duplicated saved local terminal", async () => {
+    const pane = {
+      id: "pane-local",
+      type: "Local",
+      connectionId: "local-1",
+    } as TerminalSessionPane;
+    await createSessionForPane(pane, "request-local", undefined, "D:\\My Files");
+    expect(invokeMock).toHaveBeenCalledWith("create_local_session", {
+      connectionId: "local-1",
+      createRequestId: "request-local",
+      workingDir: "D:\\My Files",
+      recordingScopeId: "pane-local",
     });
   });
 });

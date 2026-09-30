@@ -8,8 +8,9 @@ use crate::buffer::Buffer;
 use crate::crc;
 use crate::error::Error;
 use crate::header::{
-    write_slice_escaped, Encoding, Frame, Header, Zrinit, HEADER_PAYLOAD_SIZE, HEADER_SIZE,
-    ZACK_HEADER, ZDATA_HEADER, ZEOF_HEADER, ZFIN_HEADER, ZNAK_HEADER, ZRPOS_HEADER, ZRQINIT_HEADER,
+    write_slice_escaped_with_control, Encoding, Frame, Header, Zrinit, HEADER_PAYLOAD_SIZE,
+    HEADER_SIZE, ZACK_HEADER, ZDATA_HEADER, ZEOF_HEADER, ZFIN_HEADER, ZNAK_HEADER, ZRPOS_HEADER,
+    ZRQINIT_HEADER,
 };
 use crate::io::{Read, Write};
 use crate::string::String;
@@ -409,6 +410,7 @@ bitflags! {
 }
 
 /// ZMODEM sender state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Sender {
     state: SendState,
     file_name: String,
@@ -430,6 +432,7 @@ pub struct Sender {
     header_reader: HeaderReader,
     pending_event: Option<SenderEvent>,
     finish_requested: bool,
+    escape_control: bool,
 }
 
 impl Sender {
@@ -458,6 +461,7 @@ impl Sender {
             header_reader: HeaderReader::new(),
             pending_event: None,
             finish_requested: false,
+            escape_control: false,
         };
         sender.queue_zrqinit()?;
         Ok(sender)
@@ -701,6 +705,7 @@ impl Sender {
         let file_mode = self.file_mode;
         let file_name = &self.file_name;
         let file_options = self.file_options;
+        let escape_control = self.escape_control;
         let mut writer = BufferWriter::new(&mut self.outgoing);
         if write_zfile(
             &mut writer,
@@ -710,6 +715,7 @@ impl Sender {
             file_mtime,
             file_mode,
             file_options,
+            escape_control,
         )?
         .is_none()
         {
@@ -725,40 +731,54 @@ impl Sender {
         kind: SubpacketType,
         include_header: bool,
     ) -> Result<(), Error> {
+        let escape_control = self.escape_control;
         let mut writer = self.queue_writer()?;
         if include_header
             && ZDATA_HEADER
                 .with_count(offset)
-                .write(&mut writer)?
+                .write_with_escape_control(&mut writer, escape_control)?
                 .is_none()
         {
             return Err(Error::OutOfMemory);
         }
-        if write_subpacket(&mut writer, Encoding::ZBIN32, kind, data)?.is_none() {
+        if write_subpacket(&mut writer, Encoding::ZBIN32, kind, data, escape_control)?.is_none() {
             return Err(Error::OutOfMemory);
         }
         Ok(())
     }
 
     fn queue_zeof(&mut self, offset: u32) -> Result<(), Error> {
+        let escape_control = self.escape_control;
         let mut writer = self.queue_writer()?;
-        if ZEOF_HEADER.with_count(offset).write(&mut writer)?.is_none() {
+        if ZEOF_HEADER
+            .with_count(offset)
+            .write_with_escape_control(&mut writer, escape_control)?
+            .is_none()
+        {
             return Err(Error::OutOfMemory);
         }
         Ok(())
     }
 
     fn queue_zfin(&mut self) -> Result<(), Error> {
+        let escape_control = self.escape_control;
         let mut writer = self.queue_writer()?;
-        if ZFIN_HEADER.write(&mut writer)?.is_none() {
+        if ZFIN_HEADER
+            .write_with_escape_control(&mut writer, escape_control)?
+            .is_none()
+        {
             return Err(Error::OutOfMemory);
         }
         Ok(())
     }
 
     fn queue_nak(&mut self) -> Result<(), Error> {
+        let escape_control = self.escape_control;
         let mut writer = self.queue_writer()?;
-        if ZNAK_HEADER.write(&mut writer)?.is_none() {
+        if ZNAK_HEADER
+            .write_with_escape_control(&mut writer, escape_control)?
+            .is_none()
+        {
             return Err(Error::OutOfMemory);
         }
         Ok(())
@@ -830,6 +850,7 @@ impl Sender {
         let flags = header.count().to_le_bytes();
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let caps = flags[2] | flags[3];
+        self.escape_control |= (caps & Zrinit::ESCCTL.bits()) != 0;
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;
 
         if rx_buf_size == 0 {
@@ -1479,6 +1500,7 @@ fn parse_file_size(bytes: &[u8]) -> Result<u32, Error> {
 }
 
 /// Write ZRFILE
+#[allow(clippy::too_many_arguments)]
 fn write_zfile<P>(
     port: &mut P,
     buf: &mut Buffer<SUBPACKET_MAX_SIZE>,
@@ -1487,6 +1509,7 @@ fn write_zfile<P>(
     mtime: u32,
     mode: u32,
     file_options: [u8; 4],
+    escape_control: bool,
 ) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
@@ -1499,12 +1522,18 @@ where
     write!(buf, "{size} {mtime:o} {mode:o} 0 0 0\0").map_err(|_| Error::OutOfMemory)?;
 
     if Header::new(Encoding::ZBIN32, Frame::ZFILE, &file_options)
-        .write(port)?
+        .write_with_escape_control(port, escape_control)?
         .is_none()
     {
         return Ok(None);
     }
-    write_subpacket(port, Encoding::ZBIN32, SubpacketType::ZCRCW, buf)
+    write_subpacket(
+        port,
+        Encoding::ZBIN32,
+        SubpacketType::ZCRCW,
+        buf,
+        escape_control,
+    )
 }
 
 /// Writes a subpacket.
@@ -1518,12 +1547,13 @@ fn write_subpacket<P>(
     encoding: Encoding,
     kind: SubpacketType,
     data: &[u8],
+    escape_control: bool,
 ) -> Result<Option<()>, Error>
 where
     P: Write + ?Sized,
 {
     let kind = kind as u8;
-    if write_slice_escaped(port, data)?.is_none() {
+    if write_slice_escaped_with_control(port, data, escape_control)?.is_none() {
         return Ok(None);
     }
     if port.write_byte(ZDLE)?.is_none() {
@@ -1538,14 +1568,14 @@ where
             crc.update(data);
             crc.update_byte(kind);
             let buf = crc.finalize().to_le_bytes();
-            write_slice_escaped(port, &buf)
+            write_slice_escaped_with_control(port, &buf, escape_control)
         }
         Encoding::ZBIN => {
             let mut crc = crc::Crc16::new();
             crc.update(data);
             crc.update_byte(kind);
             let buf = crc.finalize().to_be_bytes();
-            write_slice_escaped(port, &buf)
+            write_slice_escaped_with_control(port, &buf, escape_control)
         }
         Encoding::ZHEX => Err(Error::Unsupported),
     }

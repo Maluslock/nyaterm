@@ -10,6 +10,5 @@ export function useShellIntegration() {
     enabled: false,
     commandRunning: false,
   });
-
   return { shellIntegrationRef };
 }

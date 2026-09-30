@@ -3,11 +3,12 @@ use super::client::{
 };
 use crate::config::SftpCwdFollowMode;
 use crate::core::capture::OutputCaptureProcessor;
-use crate::core::input::remap_del_to_bs;
 use crate::core::monitoring::stats::RemoteStatsSampler;
 use crate::core::ssh::osc::{self, OscStripper, ShellKind};
 use crate::core::terminal_session::local::split_startup_passthrough;
-use crate::core::terminal_session::{TerminalOutputDecoder, encode_terminal_input};
+use crate::core::terminal_session::{
+    TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
+};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemDownloadOoDrain,
     ZmodemEvent, ZmodemTransfer, ZmodemUploadDrain, start_zmodem_transfer,
@@ -1354,7 +1355,7 @@ pub(super) async fn ssh_io_loop(
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
                     }
-                    Some(SessionCommand::Write { mut data, origin, .. }) => {
+                    Some(SessionCommand::Write { data, raw, origin, .. }) => {
                         if zmodem_transfer.is_some()
                             || zmodem_upload_drain.should_suppress(std::time::Instant::now())
                         {
@@ -1378,10 +1379,7 @@ pub(super) async fn ssh_io_loop(
                             &mut post_login_deadline,
                         )
                         .await;
-                        if backspace_as_bs {
-                            remap_del_to_bs(&mut data);
-                        }
-                        let send_data = encode_terminal_input(&data, &encoding);
+                        let send_data = prepare_terminal_write_input(data, &encoding, raw, backspace_as_bs);
                         if phase == IoPhase::Suppressing {
                             suppression_diagnostics.record_pre_ready_write(send_data.len());
                         }
@@ -1731,7 +1729,7 @@ pub(super) async fn ssh_io_loop(
     output.close();
 
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
 
     manager.remove_session(&session_id).await;

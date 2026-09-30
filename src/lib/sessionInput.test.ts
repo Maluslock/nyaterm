@@ -5,7 +5,12 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("./invoke", () => ({ invoke: mocks.invoke }));
 
-import { sendSessionInput, sendSessionInputWithSync } from "./sessionInput";
+import {
+  sendSessionBinaryInput,
+  sendSessionBinaryInputWithSync,
+  sendSessionInput,
+  sendSessionInputWithSync,
+} from "./sessionInput";
 
 describe("sendSessionInputWithSync command confirmation", () => {
   beforeEach(() => {
@@ -25,6 +30,31 @@ describe("sendSessionInputWithSync command confirmation", () => {
       origin: "terminal_response",
       sensitivity: undefined,
     });
+  });
+
+  it("sends binary input as exact low-byte values without text bookkeeping", async () => {
+    await sendSessionBinaryInput("primary", "\x1b[M \x80\xff");
+
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledWith("write_bytes_to_session", {
+      sessionId: "primary",
+      data: [0x1b, 0x5b, 0x4d, 0x20, 0x80, 0xff],
+    });
+  });
+
+  it("broadcasts binary input to sync peers without text bookkeeping", async () => {
+    await sendSessionBinaryInputWithSync("primary", "\x1b[M \xff", [
+      "peer-a",
+      "peer-b",
+    ]);
+
+    expect(mocks.invoke).toHaveBeenCalledTimes(3);
+    for (const sessionId of ["primary", "peer-a", "peer-b"]) {
+      expect(mocks.invoke).toHaveBeenCalledWith("write_bytes_to_session", {
+        sessionId,
+        data: [0x1b, 0x5b, 0x4d, 0x20, 0xff],
+      });
+    }
   });
 
   it("registers each peer candidate before synchronized command input", async () => {

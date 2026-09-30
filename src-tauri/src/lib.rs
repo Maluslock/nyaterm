@@ -41,6 +41,8 @@ pub fn run() {
     platform::prepare_appimage_wayland_backend();
     portable_updater::schedule_cleanup_from_environment();
     let runtime = runtime::resolve().expect("failed to resolve runtime paths");
+    #[cfg(windows)]
+    platform::windows_conpty::configure(&runtime);
     runtime::prepare_webview_environment(&runtime);
 
     let session_manager = Arc::new(SessionManager::new());
@@ -166,8 +168,12 @@ pub fn run() {
             cmd::updater::download_portable_update,
             cmd::updater::apply_portable_update,
             cmd::ai::start_ai_chat_stream,
+            cmd::ai::import_ai_provider_icon,
             cmd::ai::list_ai_model_names,
             cmd::ai::refresh_ai_model_settings,
+            cmd::ai::test_ai_provider_connection,
+            cmd::ai::test_ai_model_connection,
+            cmd::ai::reveal_ai_provider_api_key,
             cmd::ai::cancel_ai_chat_stream,
             cmd::ai::detect_codex_cli,
             cmd::ai::get_codex_account_status,
@@ -221,6 +227,7 @@ pub fn run() {
             cmd::session::create_ssh_session,
             cmd::session::create_temporary_ssh_session,
             cmd::session::create_multiplexed_ssh_session,
+            cmd::session::get_default_local_shell,
             cmd::session::create_local_session,
             cmd::session::create_telnet_session,
             cmd::session::create_serial_session,
@@ -242,6 +249,7 @@ pub fn run() {
             cmd::session::cancel_session_creation,
             cmd::session::list_serial_ports,
             cmd::session::write_to_session,
+            cmd::session::write_bytes_to_session,
             cmd::session::set_session_output_paused,
             cmd::session::ack_session_output,
             cmd::session::resize_session,
@@ -260,6 +268,7 @@ pub fn run() {
             cmd::session::fuzzy_search_candidates,
             cmd::session::start_recording,
             cmd::session::stop_recording,
+            cmd::session::finish_recording_scope,
             cmd::session::is_recording,
             cmd::session::save_session_transcript,
             cmd::session::terminal_history_search,
@@ -443,6 +452,11 @@ pub fn run() {
                 _event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
+                if matches!(_event, tauri::RunEvent::Exit) {
+                    if let Some(manager) = _app.try_state::<Arc<RecordingManager>>() {
+                        manager.finish_all_scopes();
+                    }
+                }
                 if let Some(manager) = _app.try_state::<Arc<McpManager>>() {
                     manager.shutdown_cleanup();
                 }

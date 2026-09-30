@@ -375,7 +375,7 @@ async fn telnet_session_task(
                     Some(SessionCommand::DetachRenderer) => {
                         output.detach();
                     }
-                    Some(SessionCommand::Write { mut data, automated, .. }) => {
+                    Some(SessionCommand::Write { mut data, raw, automated, .. }) => {
                         if !automated {
                             let mut auto = auto_login.lock().await;
                             if let Some(auto) = auto.as_mut() {
@@ -398,7 +398,13 @@ async fn telnet_session_task(
                         }
 
                         let mut write_failed = None;
-                        if line_edit_active {
+                        if raw {
+                            let send_data = prepare_terminal_write_input(data, &encoding, true, false);
+                            let send_data = escape_telnet_application_data(&send_data, config.raw_tcp_cli);
+                            if let Err(e) = writer.write_all(&send_data).await {
+                                write_failed = Some(e);
+                            }
+                        } else if line_edit_active {
                             let edit_result = line_editor.process(&data, config.enter_mode);
                             if !edit_result.display.is_empty() {
                                 output.push_owned(edit_result.display);
@@ -422,7 +428,7 @@ async fn telnet_session_task(
                                     output.push_owned(echoed);
                                 }
                             }
-                            let send_data = encode_terminal_input(&data, &encoding);
+                            let send_data = prepare_terminal_write_input(data, &encoding, false, false);
                             for chunk in split_write_chunks(&send_data, config.force_character_at_a_time) {
                                 if let Err(e) = writer.write_all(&chunk).await {
                                     write_failed = Some(e);
@@ -539,7 +545,7 @@ async fn telnet_session_task(
     output.close();
     reader_handle.abort();
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
     manager.remove_session(&session_id).await;
     let _ = app.emit(&closed_event, ());

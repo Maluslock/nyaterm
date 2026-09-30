@@ -72,6 +72,7 @@ interface CreateXTerminalSessionEventsParams {
   }) => void;
   enterDisconnectedStateIfAttachSessionMissing: (error: unknown) => boolean;
   noteSkippedOutput: (count: number) => void;
+  noteOutputPressure: (data: string, bytes: number) => void;
   noteOutputActivity: () => void;
   updateCredentialPromptInputMode: (payload: string) => void;
   feedCredentialOutput: (payload: string) => void;
@@ -117,6 +118,7 @@ export function createXTerminalSessionEvents({
   enterDisconnectedState,
   enterDisconnectedStateIfAttachSessionMissing,
   noteSkippedOutput,
+  noteOutputPressure,
   noteOutputActivity,
   updateCredentialPromptInputMode,
   feedCredentialOutput,
@@ -166,11 +168,10 @@ export function createXTerminalSessionEvents({
           return;
         }
         noteOutputActivity();
+        noteOutputPressure(payload.data, payload.bytes);
 
         const recentPayload =
-          payload.data.length > 4096
-            ? payload.data.slice(-4096)
-            : payload.data;
+          payload.data.length > 4096 ? payload.data.slice(-4096) : payload.data;
         alternateScreenTrackerRef.current.ingest(payload.data);
         updateCredentialPromptInputMode(recentPayload);
         feedCredentialOutput(recentPayload);
@@ -318,7 +319,10 @@ export function createXTerminalSessionEvents({
         requestWake("serial_modem");
         if (event.payload.type === "progress") {
           zmodemActiveRef.current = true;
-        } else if (event.payload.type === "complete" || event.payload.type === "failed") {
+        } else if (
+          event.payload.type === "complete" ||
+          event.payload.type === "failed"
+        ) {
           zmodemActiveRef.current = false;
         }
         serialModemHandler.handle(event.payload);
@@ -365,7 +369,8 @@ export function createXTerminalSessionEvents({
         { reason: "terminal_ready", backend_attached: backendAttached },
         error,
       );
-      const sessionMissing = enterDisconnectedStateIfAttachSessionMissing(error);
+      const sessionMissing =
+        enterDisconnectedStateIfAttachSessionMissing(error);
       if (!backendAttached && !sessionMissing) {
         // The backend is still detached, so let setup retry without publishing
         // a title from an unsettled renderer.

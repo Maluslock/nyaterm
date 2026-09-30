@@ -71,6 +71,25 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
     };
   }, [open]);
 
+  const conpty = supportInfo?.conpty;
+  const bundledLabel = conpty ? t("about.conptyBundled", { version: conpty.version }) : "";
+  const systemLabel = conpty?.fallback ? t("about.conptySystemFallback") : t("about.conptySystem");
+  const conptyDisplay = !conpty
+    ? null
+    : !conpty.available
+      ? t("about.conptyUnavailable")
+      : conpty.activeBundled > 0 && conpty.activeSystem > 0
+        ? t("about.conptyMixed", { version: conpty.version })
+        : conpty.activeBundled > 0
+          ? bundledLabel
+          : conpty.activeSystem > 0
+            ? systemLabel
+            : conpty.lastUsed
+              ? t("about.conptyLastUsed", {
+                  source: conpty.lastUsed === "bundled" ? bundledLabel : systemLabel,
+                })
+              : t("about.conptyNotStarted");
+
   const copySupportInfo = async () => {
     if (!appVersion || !supportInfo) {
       return;
@@ -82,6 +101,7 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
       `Operating System: ${supportInfo.os}`,
       `Application Architecture: ${supportInfo.architecture}`,
       `Runtime: ${supportInfo.runtime === "portable" ? t("about.portable") : t("about.installed")}`,
+      ...(conptyDisplay ? [`Local Terminal ConPTY: ${conptyDisplay}`] : []),
     ].join("\n");
     try {
       await writeClipboardText(text);
@@ -113,6 +133,7 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
     [t("about.operatingSystem"), osDisplay],
     [t("about.architecture"), architectureDisplay],
     [t("about.runtime"), runtimeDisplay],
+    ...(conptyDisplay ? [[t("about.conpty"), conptyDisplay]] : []),
   ];
 
   return (

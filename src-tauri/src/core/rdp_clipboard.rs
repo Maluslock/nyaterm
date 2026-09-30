@@ -90,6 +90,7 @@ pub(crate) struct RdpClipboardBridge {
     app: AppHandle,
     pub(crate) session_id: String,
     file_enabled: bool,
+    file_transfer_available: AtomicBool,
     shutdown: AtomicBool,
     watcher_started: AtomicBool,
     proxy: Mutex<Option<Arc<Mutex<Box<dyn ClipboardMessageProxy>>>>>,
@@ -120,6 +121,7 @@ impl RdpClipboardBridge {
             app,
             session_id,
             file_enabled,
+            file_transfer_available: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             watcher_started: AtomicBool::new(false),
             proxy: Mutex::new(None),
@@ -161,8 +163,22 @@ impl RdpClipboardBridge {
         Ok(())
     }
 
+    fn advertise_initial_format_list(&self) {
+        let has_files = self.file_enabled
+            && read_clipboard_file_list_blocking().is_some_and(|paths| !paths.is_empty());
+        let formats = if !has_files
+            && read_clipboard_text_blocking()
+                .is_some_and(|text| !text.is_empty() && clipboard_text_within_limit(&text))
+        {
+            vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
+        } else {
+            Vec::new()
+        };
+        self.send(ClipboardMessage::SendInitiateCopy(formats));
+    }
+
     fn advertise_current_clipboard(&self) {
-        if self.file_enabled
+        if self.file_transfer_available.load(Ordering::SeqCst)
             && let Some(paths) = read_clipboard_file_list_blocking()
             && !paths.is_empty()
         {
@@ -218,7 +234,7 @@ impl RdpClipboardBridge {
     }
 
     fn poll_local_clipboard(&self) {
-        if self.file_enabled
+        if self.file_transfer_available.load(Ordering::SeqCst)
             && let Some(paths) = read_clipboard_file_list_blocking()
             && !paths.is_empty()
         {
@@ -813,12 +829,12 @@ impl CliprdrBackend for RdpClipboardBackend {
     }
 
     fn on_ready(&mut self) {
-        self.bridge.start_watcher();
         self.bridge.advertise_current_clipboard();
+        self.bridge.start_watcher();
     }
 
     fn on_request_format_list(&mut self) {
-        self.bridge.advertise_current_clipboard();
+        self.bridge.advertise_initial_format_list();
     }
 
     fn on_process_negotiated_capabilities(
@@ -826,19 +842,28 @@ impl CliprdrBackend for RdpClipboardBackend {
         capabilities: ClipboardGeneralCapabilityFlags,
     ) {
         self.negotiated_capabilities = capabilities;
+        self.bridge.file_transfer_available.store(
+            self.bridge.file_enabled
+                && capabilities.contains(ClipboardGeneralCapabilityFlags::STREAM_FILECLIP_ENABLED),
+            Ordering::SeqCst,
+        );
     }
 
     fn on_remote_copy(&mut self, available_formats: &[ClipboardFormat]) {
         self.bridge
             .cancel_remote_generation("Remote clipboard changed", true);
-        let file_format = self.bridge.file_enabled.then(|| {
-            available_formats.iter().find(|format| {
-                format
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| name.value() == FORMAT_NAME_FILE_LIST)
-            })
-        });
+        let file_format = self
+            .bridge
+            .file_transfer_available
+            .load(Ordering::SeqCst)
+            .then(|| {
+                available_formats.iter().find(|format| {
+                    format
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| name.value() == FORMAT_NAME_FILE_LIST)
+                })
+            });
         if let Some(Some(format)) = file_format {
             self.send(ClipboardMessage::SendInitiatePaste(format.id));
         } else if available_formats

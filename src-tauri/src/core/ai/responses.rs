@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 use tauri::AppHandle;
 use tokio::sync::oneshot;
 
-use crate::config::{AiApiFormat, AiProviderKind, AiReasoningEffort, AiSettings};
+use crate::config::{
+    AiApiFormat, AiProviderApiProtocol, AiProviderKind, AiReasoningEffort, AiSettings,
+};
 use crate::error::{AppError, AppResult};
 use crate::utils::url::{join_api_base_url, normalize_api_base_url};
 
@@ -36,11 +38,93 @@ enum ResponsesSseEvent {
 }
 
 pub(super) fn uses_responses_api(model: &ResolvedAiModel) -> bool {
-    model.api_format == AiApiFormat::Responses
-        && matches!(
+    if model.api_format != AiApiFormat::Responses {
+        return false;
+    }
+
+    match model
+        .credential
+        .as_ref()
+        .and_then(|credential| credential.api_protocol.as_ref())
+    {
+        Some(AiProviderApiProtocol::OpenaiCompatible) => true,
+        Some(_) => false,
+        None => matches!(
             model.provider_kind,
             AiProviderKind::Openai | AiProviderKind::OpenaiCompatible
-        )
+        ),
+    }
+}
+
+pub(super) async fn test_responses_model(
+    settings: &AiSettings,
+    model: &ResolvedAiModel,
+    system_prompt: &str,
+    user_prompt: &str,
+    max_output_tokens: u32,
+) -> AppResult<()> {
+    let url = responses_url(model)?;
+    let client = reqwest::Client::builder()
+        .default_headers(ai_request_headers(settings)?)
+        .build()
+        .map_err(|error| AppError::Config(format!("Failed to build AI HTTP client: {error}")))?;
+    let mut body = json!({
+        "model": model.model_name,
+        "input": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_prompt },
+        ],
+        "max_output_tokens": max_output_tokens,
+        "stream": false,
+        "store": false,
+    });
+    if let Some(effort) = responses_reasoning_effort(&settings.default_reasoning_effort) {
+        body["reasoning"] = json!({ "effort": effort });
+    }
+
+    let mut request = client.post(&url).json(&body);
+    if let Some(key) = model
+        .credential
+        .as_ref()
+        .and_then(|credential| credential.api_key.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| AppError::Config(format!("AI model test failed: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::Config(format!(
+            "AI model test failed: {status} {}",
+            truncate_preview(&body, 500)
+        )));
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|error| AppError::Config(format!("Invalid AI model test response: {error}")))?;
+    if let Some(error) = body.get("error").filter(|error| !error.is_null()) {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| error.to_string());
+        return Err(AppError::Config(format!("AI model test failed: {message}")));
+    }
+    if matches!(body["status"].as_str(), Some("failed" | "cancelled")) {
+        return Err(AppError::Config("AI model test failed".to_string()));
+    }
+    if body["id"].as_str().is_none() && body["output"].as_array().is_none() {
+        return Err(AppError::Config(
+            "AI model test returned an invalid response".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn run_responses_chat_messages_stream(
@@ -482,10 +566,13 @@ fn responses_reasoning_effort(value: &AiReasoningEffort) -> Option<&'static str>
     match value {
         AiReasoningEffort::Auto => None,
         AiReasoningEffort::None => Some("none"),
+        AiReasoningEffort::Minimal => Some("minimal"),
         AiReasoningEffort::Low => Some("low"),
         AiReasoningEffort::Medium => Some("medium"),
         AiReasoningEffort::High => Some("high"),
         AiReasoningEffort::XHigh => Some("xhigh"),
+        AiReasoningEffort::Max => Some("max"),
+        AiReasoningEffort::Ultra => Some("ultra"),
     }
 }
 
@@ -509,7 +596,7 @@ fn responses_base_url(model: &ResolvedAiModel) -> AppResult<String> {
             "Responses API requires an API base URL for OpenAI-compatible credentials".to_string(),
         )),
         (None, provider_kind) => Err(AppError::Config(format!(
-            "Responses API is not supported for {provider_kind:?}"
+            "Responses API requires an API base URL for {provider_kind:?}"
         ))),
     }
 }
@@ -528,6 +615,8 @@ mod tests {
                 id: "credential-test".to_string(),
                 name: "Test".to_string(),
                 provider_kind: AiProviderKind::OpenaiCompatible,
+                icon_data_url: None,
+                api_protocol: None,
                 api_format: AiApiFormat::Responses,
                 base_url: base_url.map(str::to_string),
                 api_key: Some("key".to_string()),

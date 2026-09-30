@@ -116,6 +116,7 @@ pub async fn execute_terminal_command(
                 &request.session_id,
                 SessionCommand::Write {
                     data,
+                    raw: false,
                     automated: true,
                     origin: InputOrigin::AiAgent,
                     sensitivity: InputSensitivity::Normal,

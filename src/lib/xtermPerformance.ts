@@ -28,6 +28,12 @@ export const XTERM_PERFORMANCE_CONFIG = {
     maxCachedMatchLines: 3_000,
   },
   output: {
+    pressure: {
+      burstWindowMs: 100,
+      burstBytes: 64 * 1024,
+      longLineChars: 64 * 1024,
+      quietMs: 400,
+    },
     /** Backlog threshold where terminal side work should start yielding to rendering/input. */
     strainedBacklogBytes: 128 * 1024,
     /** Backlog threshold for using microtask low-latency writes on normal shell output. */
@@ -89,6 +95,8 @@ export function getKeywordHighlightPerformanceConfig() {
   const highlighting = XTERM_PERFORMANCE_CONFIG.highlighting;
   return {
     ...highlighting,
-    resolvedOverscanLines: isMacOS ? highlighting.macosOverscanLines : highlighting.overscanLines,
+    resolvedOverscanLines: isMacOS
+      ? highlighting.macosOverscanLines
+      : highlighting.overscanLines,
   };
 }

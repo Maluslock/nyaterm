@@ -2,11 +2,37 @@ import type {
   AICustomActionConfig,
   AIModelConfigItem,
   AIModelDiscovery,
+  AIModelReasoningEffort,
   AIProviderCredential,
   AIProviderKind,
   AIProviderProfile,
+  AIReasoningEffort,
   AISettings,
 } from "@/types/global";
+
+export const MODEL_REASONING_EFFORTS: AIModelReasoningEffort[] = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+export const DEFAULT_MODEL_REASONING_EFFORTS: AIModelReasoningEffort[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
+export function getModelReasoningOptions(model: AIModelConfigItem | null): AIReasoningEffort[] {
+  const supported = model?.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS;
+  return ["auto", ...MODEL_REASONING_EFFORTS.filter((effort) => supported.includes(effort))];
+}
 
 export interface BuiltinProviderInfo {
   label: string;
@@ -20,7 +46,7 @@ export const DEFAULT_AI_REQUEST_USER_AGENT =
 export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderInfo>> = {
   openai: {
     label: "OpenAI",
-    defaultBaseUrl: null,
+    defaultBaseUrl: "https://api.openai.com/v1/",
     models: [
       "gpt-3.5-turbo",
       "gpt-3.5-turbo-0613",
@@ -179,7 +205,7 @@ export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderIn
   },
   anthropic: {
     label: "Anthropic",
-    defaultBaseUrl: null,
+    defaultBaseUrl: "https://api.anthropic.com/v1/",
     models: [
       "claude-3-sonnet-20240229",
       "claude-3-opus-20240229",
@@ -217,7 +243,7 @@ export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderIn
   },
   gemini: {
     label: "Google Gemini",
-    defaultBaseUrl: null,
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/",
     models: [
       "gemini-2.5-flash",
       "gemini-2.5-pro",
@@ -268,7 +294,7 @@ export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderIn
   },
   deepseek: {
     label: "DeepSeek",
-    defaultBaseUrl: null,
+    defaultBaseUrl: "https://api.deepseek.com/v1/",
     models: [
       "deepseek-chat",
       "deepseek-reasoner",
@@ -427,24 +453,33 @@ export function getCustomProviderBaseUrlPlaceholder(providerKind: AIProviderKind
 }
 
 export function supportsCustomModelDiscovery(
-  credential: Pick<AIProviderCredential, "id" | "enabled" | "provider_kind">,
+  credential: Pick<AIProviderCredential, "id" | "enabled" | "provider_kind"> &
+    Partial<Pick<AIProviderCredential, "api_protocol">>,
 ): boolean {
   return (
     !isBuiltinProvider(credential.id) &&
     credential.enabled &&
-    credential.provider_kind === "openai_compatible"
+    credential.provider_kind === "openai_compatible" &&
+    (!credential.api_protocol || credential.api_protocol === "openai_compatible")
   );
 }
 
 export function requiresManualCustomModelEntry(
-  credential: Pick<AIProviderCredential, "id" | "provider_kind">,
+  credential: Pick<AIProviderCredential, "id" | "provider_kind"> &
+    Partial<Pick<AIProviderCredential, "api_protocol">>,
 ): boolean {
-  return !isBuiltinProvider(credential.id) && credential.provider_kind !== "openai_compatible";
+  return (
+    !isBuiltinProvider(credential.id) &&
+    (credential.provider_kind !== "openai_compatible" ||
+      (credential.api_protocol != null && credential.api_protocol !== "openai_compatible"))
+  );
 }
 
 export function supportsApiFormatSelection(
-  credential: Pick<AIProviderCredential, "provider_kind">,
+  credential: Pick<AIProviderCredential, "provider_kind"> &
+    Partial<Pick<AIProviderCredential, "api_protocol">>,
 ): boolean {
+  if (credential.api_protocol && credential.api_protocol !== "openai_compatible") return false;
   return credential.provider_kind === "openai" || credential.provider_kind === "openai_compatible";
 }
 
@@ -454,7 +489,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "OpenAI",
     provider_kind: "openai",
     model: "gpt-4o-mini",
-    base_url: null,
+    base_url: "https://api.openai.com/v1/",
     api_key: null,
     enabled: false,
   },
@@ -463,7 +498,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "Anthropic",
     provider_kind: "anthropic",
     model: "claude-3-haiku-20240307",
-    base_url: null,
+    base_url: "https://api.anthropic.com/v1/",
     api_key: null,
     enabled: false,
   },
@@ -472,7 +507,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "Google Gemini",
     provider_kind: "gemini",
     model: "gemini-2.0-flash",
-    base_url: null,
+    base_url: "https://generativelanguage.googleapis.com/v1beta/",
     api_key: null,
     enabled: false,
   },
@@ -481,7 +516,7 @@ const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
     name: "DeepSeek",
     provider_kind: "deepseek",
     model: "deepseek-chat",
-    base_url: null,
+    base_url: "https://api.deepseek.com/v1/",
     api_key: null,
     enabled: false,
   },
@@ -589,6 +624,7 @@ function credentialFromProfile(profile: AIProviderProfile): AIProviderCredential
     id: profile.id,
     name: profile.name,
     provider_kind: profile.provider_kind,
+    api_protocol: null,
     api_format: "chat_completions",
     base_url: profile.base_url,
     api_key: profile.api_key,
@@ -597,7 +633,7 @@ function credentialFromProfile(profile: AIProviderProfile): AIProviderCredential
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
-  schema_version: 6,
+  schema_version: 7,
   enabled: false,
   context_line_limit: 200,
   redaction_enabled: true,

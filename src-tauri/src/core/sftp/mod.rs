@@ -114,6 +114,7 @@ pub(crate) struct AutoRemoteFs {
     sftp_compatibility_mode: bool,
     sftp_transfer_settings: crate::config::TransferSettings,
     force_sftp: bool,
+    shell_available: bool,
 }
 
 impl AutoRemoteFs {
@@ -127,6 +128,7 @@ impl AutoRemoteFs {
         sftp_compatibility_mode: bool,
         sftp_transfer_settings: crate::config::TransferSettings,
         force_sftp: bool,
+        shell_available: bool,
     ) -> Self {
         Self {
             inner: RwLock::new(None),
@@ -137,6 +139,7 @@ impl AutoRemoteFs {
             sftp_compatibility_mode,
             sftp_transfer_settings,
             force_sftp,
+            shell_available,
         }
     }
 
@@ -150,6 +153,7 @@ impl AutoRemoteFs {
             &self.sftp_encoding,
             self.sftp_pipeline_depth_override,
             self.sftp_compatibility_mode,
+            self.shell_available,
             client_config,
         )
         .await?;
@@ -267,6 +271,7 @@ pub(crate) fn create_auto_remote_fs(
     ssh_handle: Arc<SshConnectionHandles>,
     config: &crate::core::ssh::SshConfig,
     force_sftp: bool,
+    shell_available: bool,
 ) -> Arc<AutoRemoteFs> {
     let sftp_encoding = if config.sftp.filename_encoding.trim().is_empty() {
         config.encoding.clone()
@@ -286,6 +291,7 @@ pub(crate) fn create_auto_remote_fs(
         config.sftp.compatibility_mode,
         transfer_settings,
         force_sftp,
+        shell_available,
     ))
 }
 
@@ -294,7 +300,7 @@ pub(crate) async fn create_compatibility_remote_fs(
     ssh_handle: Arc<SshConnectionHandles>,
     config: &crate::core::ssh::SshConfig,
 ) -> AppResult<Arc<AutoRemoteFs>> {
-    let auto_fs = create_auto_remote_fs(app, ssh_handle, config, true);
+    let auto_fs = create_auto_remote_fs(app, ssh_handle, config, true, false);
     auto_fs.ensure_backend().await?;
     Ok(auto_fs)
 }
@@ -433,6 +439,7 @@ async fn get_or_create_auto_fs(
         sftp_compatibility_mode,
         transfer_settings,
         force_sftp,
+        !force_sftp,
     ));
 
     {

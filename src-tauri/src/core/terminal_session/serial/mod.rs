@@ -2,13 +2,14 @@
 
 use crate::config::AiExecutionProfile;
 use crate::core::capture::OutputCaptureProcessor;
-use crate::core::input::remap_del_to_bs;
 use crate::core::session::{
     DynamicTitleCapabilities, SessionCommand, SessionCommandReceiver, SessionCommandSender,
     SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType, SharedCwd,
     session_command_channel,
 };
-use crate::core::terminal_session::{TerminalOutputDecoder, encode_terminal_input};
+use crate::core::terminal_session::{
+    TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
+};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemEvent, ZmodemTransfer,
     start_zmodem_transfer,

@@ -5,6 +5,7 @@ import {
   buildQuickCommandCategoryTree,
   collectQuickCommandCategoryDescendantIds,
   deleteQuickCommandCategoryTree,
+  filterQuickCommandsByCategory,
   getNextQuickCommandCategorySortOrder,
   getQuickCommandCategoryMoveState,
   hasQuickCommandCategorySiblingName,
@@ -13,7 +14,7 @@ import {
 } from "./quickCommandCategories";
 
 describe("quickCommandCategories", () => {
-  it("builds a tree with aggregate counts and orphan fallback", () => {
+  it("builds a tree with direct and aggregate counts and orphan fallback", () => {
     const categories = [
       category("root", "Root"),
       category("child", "Child", "root"),
@@ -36,9 +37,13 @@ describe("quickCommandCategories", () => {
     expect(tree.find((node) => node.category.id === "root")?.totalCount).toBe(
       2,
     );
+    expect(tree.find((node) => node.category.id === "root")?.count).toBe(1);
     expect(
       tree.find((node) => node.category.id === "root")?.children[0].category.id,
     ).toBe("child");
+    expect(
+      tree.find((node) => node.category.id === "root")?.children[0].count,
+    ).toBe(1);
     expect(tree.find((node) => node.category.id === "orphan")?.totalCount).toBe(
       1,
     );
@@ -57,6 +62,26 @@ describe("quickCommandCategories", () => {
         collectQuickCommandCategoryDescendantIds(categories, "root"),
       ).sort(),
     ).toEqual(["child", "nested", "root"]);
+  });
+
+  it("filters commands by direct category membership", () => {
+    const commands = [
+      command("cmd-root", "root"),
+      command("cmd-child", "child"),
+      command("cmd-none"),
+    ];
+
+    expect(
+      filterQuickCommandsByCategory(commands, "root").map((item) => item.id),
+    ).toEqual(["cmd-root"]);
+    expect(
+      filterQuickCommandsByCategory(commands, "child").map((item) => item.id),
+    ).toEqual(["cmd-child"]);
+    expect(
+      filterQuickCommandsByCategory(commands, "uncategorized").map(
+        (item) => item.id,
+      ),
+    ).toEqual(["cmd-none"]);
   });
 
   it("builds display paths", () => {

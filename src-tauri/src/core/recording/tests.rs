@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
     use super::{
-        ExistingFileBehavior, InputSensitivity, RecordingContext, RecordingManager,
-        RecordingMode, RecordingProfile, RotationPolicy, consume_matching_prefix,
-        resolve_recording_path, strip_one_leading_newline, strip_terminal_control_sequences,
+        ExistingFileBehavior, InputSensitivity, RecordingContext, RecordingManager, RecordingMode,
+        RecordingProfile, RotationPolicy, consume_matching_prefix, resolve_recording_path,
+        strip_one_leading_newline, strip_terminal_control_sequences,
     };
-    use std::{fs, path::PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{fs, path::PathBuf};
     use time::OffsetDateTime;
 
     fn unique_path(name: &str) -> String {
@@ -92,11 +92,7 @@ mod tests {
 
     #[test]
     fn replays_terminal_line_edits_when_cleaning_output() {
-        let raw = concat!(
-            "ls",
-            "\x1b[90m -la\x1b[0m\x1b[4D",
-            "\r\x1b[Kls -la\r\n"
-        );
+        let raw = concat!("ls", "\x1b[90m -la\x1b[0m\x1b[4D", "\r\x1b[Kls -la\r\n");
 
         let cleaned = strip_terminal_control_sequences(raw);
 
@@ -449,6 +445,97 @@ mod tests {
         assert!(!recorded.contains("prompt without newline"));
         assert!(recorded.contains("after"));
 
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recording_scope_survives_disconnect_and_reconnect() {
+        let manager = RecordingManager::new();
+        assert!(manager.bind_session_scope("s1", "pane-1"));
+        let path = unique_path("reconnect-recording");
+        manager.start("s1", &path, true, false).unwrap();
+        manager.write_output("s1", "before\n");
+        manager.disconnect_session("s1");
+        assert!(manager.is_recording("s1"));
+
+        let disconnected_path = unique_path("disconnected-transcript");
+        manager
+            .save_transcript("s1", &disconnected_path, true, false)
+            .unwrap();
+        assert!(
+            fs::read_to_string(&disconnected_path)
+                .unwrap()
+                .contains("before")
+        );
+
+        assert!(!manager.bind_session_scope("s2", "pane-1"));
+        assert_eq!(manager.get_recording_status("s2").unwrap().session_id, "s2");
+        manager.write_output("s2", "after\n");
+        manager.stop("s2").unwrap();
+        let recorded = fs::read_to_string(&path).unwrap();
+        assert!(recorded.contains("before"));
+        assert!(recorded.contains("after"));
+        assert!(recorded.contains("Session disconnected"));
+        assert!(recorded.contains("Session reconnected"));
+        let transcript_path = unique_path("reconnected-transcript");
+        manager
+            .save_transcript("s2", &transcript_path, true, false)
+            .unwrap();
+        let transcript = fs::read_to_string(&transcript_path).unwrap();
+        assert!(transcript.contains("before"));
+        assert!(transcript.contains("after"));
+        manager.disconnect_session("s2");
+        manager.finish_scope("pane-1");
+        assert!(manager.get_recorder("s1").is_none());
+        for path in [path, disconnected_path, transcript_path] {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn scope_finalization_waits_for_last_output_and_panes_are_isolated() {
+        let manager = RecordingManager::new();
+        manager.bind_session_scope("s1", "pane-1");
+        manager.bind_session_scope("s2", "pane-2");
+        let path = unique_path("finalize-recording");
+        manager.start("s1", &path, true, false).unwrap();
+        manager.finish_scope("pane-1");
+        manager.write_output("s1", "last output\n");
+        manager.write_output("s2", "other pane\n");
+        manager.disconnect_session("s1");
+        assert!(fs::read_to_string(&path).unwrap().contains("last output"));
+        assert!(manager.get_recorder("s1").is_none());
+        let other_path = unique_path("other-pane-transcript");
+        manager
+            .save_transcript("s2", &other_path, true, false)
+            .unwrap();
+        assert!(
+            !fs::read_to_string(&other_path)
+                .unwrap()
+                .contains("last output")
+        );
+        manager.disconnect_session("s2");
+        manager.finish_scope("pane-2");
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(other_path);
+    }
+
+    #[test]
+    fn scope_waits_for_overlapping_transports_and_does_not_restart_after_stop() {
+        let manager = RecordingManager::new();
+        assert!(manager.bind_session_scope("s1", "pane"));
+        let path = unique_path("manual-stop");
+        manager.start("s1", &path, true, false).unwrap();
+        manager.stop("s1").unwrap();
+        assert!(!manager.bind_session_scope("s2", "pane"));
+        assert!(!manager.is_recording("s2"));
+
+        manager.finish_scope("pane");
+        manager.disconnect_session("s2");
+        assert!(manager.get_recorder("s1").is_some());
+        manager.write_output("s1", "late output\n");
+        manager.disconnect_session("s1");
+        assert!(manager.get_recorder("s1").is_none());
         let _ = fs::remove_file(path);
     }
 

@@ -15,7 +15,13 @@ import type {
 /* Types                                                                        */
 /* -------------------------------------------------------------------------- */
 
-export type EntityKind = "url" | "ip" | "hostPort" | "archive" | "file" | "custom";
+export type EntityKind =
+  | "url"
+  | "ip"
+  | "hostPort"
+  | "archive"
+  | "file"
+  | "custom";
 
 export type ExecutionTrigger =
   | "plainClick"
@@ -149,8 +155,16 @@ export interface ExecutionPolicy {
     ctx: ActionContext,
     trigger: ExecutionTrigger,
   ) => boolean | Promise<boolean>;
-  transformCommand?: (command: string, ctx: ActionContext, trigger: ExecutionTrigger) => string;
-  resolveAliasCommand?: (command: string, ctx: ActionContext, trigger: ExecutionTrigger) => string;
+  transformCommand?: (
+    command: string,
+    ctx: ActionContext,
+    trigger: ExecutionTrigger,
+  ) => string;
+  resolveAliasCommand?: (
+    command: string,
+    ctx: ActionContext,
+    trigger: ExecutionTrigger,
+  ) => string;
   onExecutionError?: (
     error: unknown,
     action: ResolvedAction,
@@ -205,7 +219,10 @@ export interface HostPortMatcherOptions extends CommonMatcherOptions {
 /* Helpers                                                                       */
 /* -------------------------------------------------------------------------- */
 
-function resolveActions(matcher: ActionMatcher, ctx: ActionContext): ResolvedAction[] {
+function resolveActions(
+  matcher: ActionMatcher,
+  ctx: ActionContext,
+): ResolvedAction[] {
   const defs = matcher.getActions(ctx);
   return defs
     .filter((d) => !d.when || d.when(ctx))
@@ -265,24 +282,29 @@ interface ParsedLine {
   endY: number;
 }
 
-function readLogicalLineAtAbsoluteY(terminal: Terminal, absY: number): ParsedLine | null {
+const MAX_LOGICAL_LINE_SCAN_CHARS = 16 * 1024;
+const MAX_LOGICAL_LINE_ROWS = 256;
+
+function readLogicalLineAtAbsoluteY(
+  terminal: Terminal,
+  absY: number,
+): ParsedLine | null {
   const buffer = terminal.buffer.active;
   const line = buffer.getLine(absY);
   if (!line) return null;
 
-  // Walk backwards to find the start of a wrapped group
   let startY = absY;
-  while (startY > 0) {
-    const prev = buffer.getLine(startY - 1);
-    if (!prev?.isWrapped) break;
-    startY--;
+  while (startY > 0 && buffer.getLine(startY)?.isWrapped) {
+    if (absY - startY + 2 > MAX_LOGICAL_LINE_ROWS) return null;
+    startY -= 1;
   }
 
   let endY = absY;
   while (endY + 1 < buffer.length) {
     const next = buffer.getLine(endY + 1);
     if (!next?.isWrapped) break;
-    endY++;
+    if (endY - startY + 2 > MAX_LOGICAL_LINE_ROWS) return null;
+    endY += 1;
   }
 
   // Rebuild the full logical line from startY up through wrapped continuations
@@ -298,6 +320,7 @@ function readLogicalLineAtAbsoluteY(terminal: Terminal, absY: number): ParsedLin
 
     const maxCols = Math.min(l.length, terminal.cols);
     const text = l.translateToString(y === endY, 0, maxCols);
+    if (full.length + text.length > MAX_LOGICAL_LINE_SCAN_CHARS) return null;
 
     if (y < absY) {
       offsetChars += text.length;
@@ -331,7 +354,10 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
   private _cache = new Map<string, ActionLink[]>();
 
   // Decoration layer: key → {deco, marker}, line → keys, scanned line set
-  private _decoCache = new Map<string, { deco: IDecoration; marker: IMarker }>();
+  private _decoCache = new Map<
+    string,
+    { deco: IDecoration; marker: IMarker }
+  >();
   private _lineToDecoKeys = new Map<number, string[]>();
   private _scannedAbsLines = new Set<number>();
   private _writeDecoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -346,10 +372,14 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
   private static readonly DECORATION_DEBOUNCE_MS = 50;
   private static readonly DECORATION_THROTTLE_MS = 80;
   private static readonly MAX_CACHE_ENTRIES = 2000;
-  private static readonly MAX_LOGICAL_LINE_SCAN_CHARS = 16 * 1024;
 
-  constructor(matchers: ActionMatcher[] = [], options: ActionLinksAddonOptions = {}) {
-    this._matchers = [...matchers].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  constructor(
+    matchers: ActionMatcher[] = [],
+    options: ActionLinksAddonOptions = {},
+  ) {
+    this._matchers = [...matchers].sort(
+      (a, b) => (b.priority ?? 0) - (a.priority ?? 0),
+    );
     this._options = {
       allowCtrlOrMetaClickExecute: true,
       allowAltClickMenu: true,
@@ -406,7 +436,9 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
   }
 
   setMatchers(matchers: ActionMatcher[]): void {
-    this._matchers = [...matchers].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    this._matchers = [...matchers].sort(
+      (a, b) => (b.priority ?? 0) - (a.priority ?? 0),
+    );
     this._cache.clear();
     this._clearAllDecorations();
     this._scheduleWriteDecoRefresh();
@@ -439,7 +471,10 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
   }
 
   /* ILinkProvider */
-  provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
+  provideLinks(
+    bufferLineNumber: number,
+    callback: (links: ILink[] | undefined) => void,
+  ): void {
     const terminal = this._terminal;
     if (
       !terminal ||
@@ -456,12 +491,11 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
       callback(undefined);
       return;
     }
-    if (parsed.full.length > ActionLinksAddon.MAX_LOGICAL_LINE_SCAN_CHARS) {
-      callback(undefined);
-      return;
-    }
-
-    const actionLinks = this._getCachedActionLinks(terminal, parsed.full, bufferLineNumber);
+    const actionLinks = this._getCachedActionLinks(
+      terminal,
+      parsed.full,
+      bufferLineNumber,
+    );
 
     const ilinks: ILink[] = [];
     for (const al of actionLinks) {
@@ -545,7 +579,12 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
   }
 
   private _refreshDecorations(terminal: Terminal): void {
-    if (this._suspended || !terminal.buffer?.active || this._matchers.length === 0) return;
+    if (
+      this._suspended ||
+      !terminal.buffer?.active ||
+      this._matchers.length === 0
+    )
+      return;
     if (terminal.buffer.active.type === "alternate") {
       this._clearAllDecorations();
       return;
@@ -576,7 +615,8 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
 
       // Reuse memoized result for immutable scrollback lines
       if (this._scannedAbsLines.has(absLineY)) {
-        for (const k of this._lineToDecoKeys.get(absLineY) ?? []) requiredKeys.add(k);
+        for (const k of this._lineToDecoKeys.get(absLineY) ?? [])
+          requiredKeys.add(k);
         continue;
       }
 
@@ -587,22 +627,23 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
         }
         continue;
       }
-      if (parsed.full.length > ActionLinksAddon.MAX_LOGICAL_LINE_SCAN_CHARS) {
-        if (parsed.endY < buffer.baseY) {
-          this._scannedAbsLines.add(absLineY);
-          this._lineToDecoKeys.delete(absLineY);
-        }
-        continue;
-      }
-
-      const actionLinks = this._getCachedActionLinks(terminal, parsed.full, absLineY + 1);
+      const actionLinks = this._getCachedActionLinks(
+        terminal,
+        parsed.full,
+        absLineY + 1,
+      );
 
       const lineKeys: string[] = [];
       for (const al of actionLinks) {
         const span = this._getActionLinkCellSpan(al, parsed);
         if (!span) continue;
 
-        const key = this._ensureDecoration(absLineY, span.cellStart, span.cellWidth, cursorAbsY);
+        const key = this._ensureDecoration(
+          absLineY,
+          span.cellStart,
+          span.cellWidth,
+          cursorAbsY,
+        );
         if (key) {
           lineKeys.push(key);
           requiredKeys.add(key);
@@ -741,7 +782,11 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     const cached = this._cache.get(logicalText);
     if (cached) return cached;
 
-    const actionLinks = this._computeActionLinks(terminal, logicalText, bufferLineNumber);
+    const actionLinks = this._computeActionLinks(
+      terminal,
+      logicalText,
+      bufferLineNumber,
+    );
     this._cache.set(logicalText, actionLinks);
 
     if (this._cache.size > ActionLinksAddon.MAX_CACHE_ENTRIES) {
@@ -759,7 +804,8 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     logicalText: string,
     bufferLineNumber: number,
   ): ActionLink[] {
-    const viewportLine = bufferLineNumber - terminal.buffer.active.viewportY - 1;
+    const viewportLine =
+      bufferLineNumber - terminal.buffer.active.viewportY - 1;
     const input: MatchInput = {
       text: logicalText,
       startLineIndex: 0,
@@ -770,14 +816,18 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     const results: ActionLink[] = [];
     const covered: Array<[number, number]> = [];
 
-    const sorted = [...this._matchers].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    const sorted = [...this._matchers].sort(
+      (a, b) => (b.priority ?? 0) - (a.priority ?? 0),
+    );
 
     for (const matcher of sorted) {
       if (matcher.prefilter && !matcher.prefilter(input)) continue;
 
       const matches = matcher.match(input);
       for (const m of matches) {
-        const overlaps = covered.some(([s, e]) => m.startIndex < e && m.endIndex > s);
+        const overlaps = covered.some(
+          ([s, e]) => m.startIndex < e && m.endIndex > s,
+        );
         if (overlaps) continue;
         covered.push([m.startIndex, m.endIndex]);
 
@@ -831,13 +881,18 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     if (endIndex <= lineStart || startIndex >= lineEnd) return null;
 
     const segmentStart = Math.max(startIndex - parsed.offset, 0);
-    const segmentEnd = Math.min(endIndex - parsed.offset, parsed.lineText.length);
+    const segmentEnd = Math.min(
+      endIndex - parsed.offset,
+      parsed.lineText.length,
+    );
     if (segmentEnd <= segmentStart) return null;
 
     const cellStart = parsed.cellMap
       ? (parsed.cellMap[segmentStart] ?? segmentStart)
       : segmentStart;
-    const cellEnd = parsed.cellMap ? (parsed.cellMap[segmentEnd] ?? segmentEnd) : segmentEnd;
+    const cellEnd = parsed.cellMap
+      ? (parsed.cellMap[segmentEnd] ?? segmentEnd)
+      : segmentEnd;
     const cellWidth = cellEnd - cellStart;
     if (cellWidth <= 0) return null;
 
@@ -882,7 +937,10 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     showTooltip({ event, text: al.text, range: al.range, link: al });
   }
 
-  private async _handleActivate(event: MouseEvent, al: ActionLink): Promise<void> {
+  private async _handleActivate(
+    event: MouseEvent,
+    al: ActionLink,
+  ): Promise<void> {
     const {
       allowCtrlOrMetaClickExecute,
       allowAltClickMenu,
@@ -922,7 +980,10 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
     }
   }
 
-  private async _executeDefault(al: ActionLink, trigger: ExecutionTrigger): Promise<void> {
+  private async _executeDefault(
+    al: ActionLink,
+    trigger: ExecutionTrigger,
+  ): Promise<void> {
     const defaultAction = al.actions.find((a) => a.isDefault) ?? al.actions[0];
     if (defaultAction) {
       await this._executeById(al, defaultAction.id, trigger);
@@ -946,8 +1007,10 @@ export class ActionLinksAddon implements ITerminalAddon, ILinkProvider {
       }
 
       let cmd = action.command;
-      if (policy?.resolveAliasCommand) cmd = policy.resolveAliasCommand(cmd, al.ctx, trigger);
-      if (policy?.transformCommand) cmd = policy.transformCommand(cmd, al.ctx, trigger);
+      if (policy?.resolveAliasCommand)
+        cmd = policy.resolveAliasCommand(cmd, al.ctx, trigger);
+      if (policy?.transformCommand)
+        cmd = policy.transformCommand(cmd, al.ctx, trigger);
 
       if (executeCommand) {
         await executeCommand(cmd, action, al.ctx, trigger);

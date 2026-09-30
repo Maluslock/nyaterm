@@ -8,7 +8,9 @@ use crate::core::session::{
     SessionHandle, SessionInfo, SessionManager, SessionReadyHook, SessionType, SharedCwd,
     session_command_channel,
 };
-use crate::core::terminal_session::{TerminalOutputDecoder, encode_terminal_input};
+use crate::core::terminal_session::{
+    TerminalOutputDecoder, encode_terminal_input, prepare_terminal_write_input,
+};
 use crate::core::zmodem::{
     ZmodemAction, ZmodemDetectResult, ZmodemDetector, ZmodemDirection, ZmodemDownloadOoDrain,
     ZmodemEvent, ZmodemTransfer, ZmodemUploadDrain, start_zmodem_transfer,

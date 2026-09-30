@@ -72,6 +72,42 @@ export function useModalChildWindows() {
   const modalChildWindowCount = modalChildWindowLabels.size;
 
   useEffect(() => {
+    if (modalChildWindowCount === 0) return;
+
+    let disposed = false;
+    let checking = false;
+    const reconcileClosedWindows = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const openLabels = await getOpenModalChildWindowLabels();
+        if (disposed) return;
+        const labels = openLabels.filter((label) => !closingLabelsRef.current.has(label));
+        if (
+          labels.length === modalChildWindowLabels.size &&
+          labels.every((label) => modalChildWindowLabels.has(label))
+        ) {
+          return;
+        }
+        setModalChildWindowLabels(new Set(labels));
+        await syncMainWindowModalState();
+      } catch {
+        // The next check can recover from a transient window query failure.
+      } finally {
+        checking = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void reconcileClosedWindows();
+    }, 500);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [modalChildWindowCount, modalChildWindowLabels]);
+
+  useEffect(() => {
     let unlistenFocusChanged: (() => void) | undefined;
 
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {

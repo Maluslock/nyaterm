@@ -1,45 +1,68 @@
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
   MdDelete,
-  MdExpandLess,
-  MdExpandMore,
+  MdEdit,
   MdLogin,
   MdLogout,
   MdOpenInNew,
   MdRefresh,
+  MdVisibility,
+  MdVisibilityOff,
 } from "react-icons/md";
+import { TbPlugConnected } from "react-icons/tb";
 import { toast } from "sonner";
+import { ProviderBadge } from "@/components/ai/ProviderBadge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SelectItem } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useApp } from "@/context/AppContext";
-import { useSettingsDraft } from "@/context/SettingsDraftContext";
 import {
+  AI_PROVIDERS,
   aiModelIdForCredential,
   aiModelIdForProvider,
   BUILTIN_PROVIDERS,
-  CUSTOM_AI_PROVIDER_PROTOCOLS,
+  DEFAULT_MODEL_REASONING_EFFORTS,
   getCustomProviderBaseUrlPlaceholder,
   getProviderLabel,
   isBuiltinProvider,
-  requiresManualCustomModelEntry,
+  MODEL_REASONING_EFFORTS,
   supportsApiFormatSelection,
-  supportsCustomModelDiscovery,
 } from "@/lib/aiSettings";
 import { writeClipboardText } from "@/lib/clipboard";
+import { isCloudSecretMasked, secretInputValue, secretPlaceholder } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
 import { getOwnerMainWindowLabel } from "@/lib/windowManager";
 import type {
-  AIApiFormat,
   AICustomActionConfig,
   AIModelConfigItem,
+  AIModelReasoningEffort,
+  AIProviderApiProtocol,
   AIProviderCredential,
   AIProviderKind,
   AISettings,
@@ -74,11 +97,71 @@ function newCredential(): AIProviderCredential {
     id: `credential-${crypto.randomUUID()}`,
     name: "",
     provider_kind: "openai_compatible",
+    api_protocol: null,
     api_format: "chat_completions",
     base_url: "",
     api_key: "",
     enabled: true,
   };
+}
+
+function providerNameTaken(
+  name: string,
+  credentials: AIProviderCredential[],
+  excludeId?: string,
+): boolean {
+  const normalized = name.trim().toLocaleLowerCase();
+  return (
+    normalized.length > 0 &&
+    credentials.some(
+      (credential) =>
+        credential.enabled &&
+        credential.id !== excludeId &&
+        credential.name.trim().toLocaleLowerCase() === normalized,
+    )
+  );
+}
+
+function availableProviderName(
+  baseName: string,
+  credentials: AIProviderCredential[],
+  excludeId?: string,
+): string {
+  if (!providerNameTaken(baseName, credentials, excludeId)) return baseName;
+  let suffix = 2;
+  while (providerNameTaken(`${baseName}-${suffix}`, credentials, excludeId)) suffix += 1;
+  return `${baseName}-${suffix}`;
+}
+
+function defaultProviderName(
+  credential: AIProviderCredential,
+  credentials: AIProviderCredential[],
+): string {
+  const baseName =
+    credential.provider_kind === "openai_compatible"
+      ? "my-provider"
+      : getProviderLabel(credential.provider_kind);
+  return availableProviderName(baseName, credentials, credential.id);
+}
+
+function providerApiProtocol(credential: AIProviderCredential): AIProviderApiProtocol {
+  if (credential.api_protocol) return credential.api_protocol;
+  switch (credential.provider_kind) {
+    case "anthropic":
+      return "anthropic";
+    case "gemini":
+      return "gemini";
+    case "ollama":
+      return "ollama";
+    default:
+      return "openai_compatible";
+  }
+}
+
+function providerProtocolSelectValue(credential: AIProviderCredential): string {
+  const protocol = providerApiProtocol(credential);
+  if (protocol !== "openai_compatible") return protocol;
+  return credential.api_format === "responses" ? "responses" : "chat_completions";
 }
 
 function newAction(prefix: string): AICustomActionConfig {
@@ -90,12 +173,23 @@ function newAction(prefix: string): AICustomActionConfig {
   };
 }
 
-function DeleteIconButton({ onDelete, title }: { onDelete: () => void; title: string }) {
+function DeleteIconButton({
+  onDelete,
+  title,
+  disabled,
+}: {
+  onDelete: () => void;
+  title: string;
+  disabled?: boolean;
+}) {
   return (
     <Button
+      type="button"
       size="icon-sm"
       variant="ghost"
       title={title}
+      aria-label={title}
+      disabled={disabled}
       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
       onClick={onDelete}
     >
@@ -897,48 +991,282 @@ function groupModels(
   });
 }
 
+function reconcileProviderModels(
+  models: AIModelConfigItem[],
+  credential: AIProviderCredential,
+  names: string[],
+): AIModelConfigItem[] {
+  const builtin = isBuiltinProvider(credential.id);
+  const groupKey = groupKeyForCredential(credential);
+  const returnedNames = new Map<string, string>();
+  for (const name of names) {
+    const trimmed = name.trim();
+    if (!trimmed) continue;
+    const id = builtin
+      ? aiModelIdForProvider(credential.provider_kind, trimmed)
+      : aiModelIdForCredential(credential.id, trimmed);
+    returnedNames.set(id, trimmed);
+  }
+  const now = new Date().toISOString();
+  const nextModels = models.map((model) => {
+    if (model.backend !== "genai" || (model.credential_id ?? model.provider_kind) !== groupKey) {
+      return model;
+    }
+    return {
+      ...model,
+      last_seen_at: returnedNames.has(model.id) ? now : null,
+    };
+  });
+  const existingIds = new Set(nextModels.map((model) => model.id));
+  for (const [id, name] of returnedNames) {
+    if (existingIds.has(id)) continue;
+    nextModels.push({
+      id,
+      name,
+      backend: "genai",
+      provider_kind: credential.provider_kind,
+      credential_id: builtin ? null : credential.id,
+      enabled: false,
+      source: "rust-genai",
+      last_seen_at: now,
+    });
+  }
+  return nextModels;
+}
+
 export function AiModelsTab() {
   const { t } = useTranslation();
-  const { appSettings, updateAppSettings, replaceAppSettings } = useApp();
-  const { committedSettings } = useSettingsDraft();
+  const { appSettings, updateAppSettings } = useApp();
   const ai = appSettings.ai;
-  const [query, setQuery] = useState("");
+  const [selectedProviderCredentialId, setSelectedProviderCredentialId] = useState<string | null>(
+    null,
+  );
+  const [showProviderChoices, setShowProviderChoices] = useState(false);
+  const [providerListScrolling, setProviderListScrolling] = useState(false);
+  const providerListScrollTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (providerListScrollTimer.current !== null) {
+        window.clearTimeout(providerListScrollTimer.current);
+      }
+    },
+    [],
+  );
+  const showProviderListScrollbar = () => {
+    setProviderListScrolling(true);
+    if (providerListScrollTimer.current !== null) {
+      window.clearTimeout(providerListScrollTimer.current);
+    }
+    providerListScrollTimer.current = window.setTimeout(() => {
+      setProviderListScrolling(false);
+      providerListScrollTimer.current = null;
+    }, 1000);
+  };
+  const [providerDraft, setProviderDraft] = useState<{
+    credential: AIProviderCredential;
+    isAutomatic?: boolean;
+  } | null>(() =>
+    ai.provider_credentials.some((credential) => credential.enabled)
+      ? null
+      : { credential: newCredential(), isAutomatic: true },
+  );
+  const [showProviderApiKey, setShowProviderApiKey] = useState(false);
+  const [revealedProviderApiKey, setRevealedProviderApiKey] = useState<{
+    credentialId: string;
+    value: string;
+  } | null>(null);
+  const [revealingProviderApiKey, setRevealingProviderApiKey] = useState(false);
+  const providerApiKeyRevealGeneration = useRef(0);
+  const [providerNameInput, setProviderNameInput] = useState<{
+    credentialId: string;
+    value: string;
+  } | null>(null);
+  const [showProviderValidation, setShowProviderValidation] = useState(false);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [providerModelCount, setProviderModelCount] = useState<number | null>(null);
+  const [testedDraftModels, setTestedDraftModels] = useState<{
+    credentialId: string;
+    names: string[];
+  } | null>(null);
+  const [providerConnectionStatus, setProviderConnectionStatus] = useState<
+    "idle" | "testing" | "success" | "error"
+  >("idle");
+  const [providerStatuses, setProviderStatuses] = useState<
+    Record<string, "idle" | "testing" | "success" | "error">
+  >({});
+  const providerConnectionTestGeneration = useRef(0);
+  const providerListRefreshGeneration = useRef(0);
   const [manualModelNames, setManualModelNames] = useState<Record<string, string>>({});
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [refreshingCurrentModels, setRefreshingCurrentModels] = useState(false);
+  const [testingModelId, setTestingModelId] = useState<string | null>(null);
+  const [modelTestResults, setModelTestResults] = useState<Record<string, "success" | "error">>({});
+  const modelTestGeneration = useRef(0);
+  const cancelProviderConnectionTest = () => {
+    providerConnectionTestGeneration.current += 1;
+    setTestingProviderId(null);
+    setRefreshingCurrentModels(false);
+    if (testingProviderId) {
+      setProviderStatuses((current) =>
+        current[testingProviderId] === "testing"
+          ? { ...current, [testingProviderId]: "idle" }
+          : current,
+      );
+    }
+  };
+  const invalidateProviderListRefresh = () => {
+    providerListRefreshGeneration.current += 1;
+    setRefreshing(false);
+    setProviderStatuses((current) => {
+      const next = { ...current };
+      for (const id of Object.keys(next)) {
+        if (next[id] === "testing") next[id] = "idle";
+      }
+      return next;
+    });
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Configuration changes invalidate pending model tests and their results.
+  useEffect(() => {
+    modelTestGeneration.current += 1;
+    setTestingModelId(null);
+    setModelTestResults({});
+  }, [
+    ai.models,
+    ai.provider_credentials,
+    ai.default_reasoning_effort,
+    ai.request_user_agent,
+    ai.timeout_ms,
+  ]);
   const update = (patch: Partial<AISettings>) => updateAppSettings({ ai: { ...ai, ...patch } });
 
   const enabledCredentials = useMemo(
     () => ai.provider_credentials.filter((credential) => credential.enabled),
     [ai.provider_credentials],
   );
-
-  const enabledProviderKinds = useMemo(() => {
-    const kinds = new Set<string>();
-    for (const c of ai.provider_credentials) {
-      if (c.enabled) kinds.add(isBuiltinProvider(c.id) ? c.provider_kind : c.id);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Adding or removing an account closes the preset picker.
+  useEffect(() => {
+    setShowProviderChoices(false);
+  }, [enabledCredentials.length]);
+  useEffect(() => {
+    if (enabledCredentials.length === 0 && !providerDraft) {
+      setProviderDraft({ credential: newCredential(), isAutomatic: true });
+    } else if (enabledCredentials.length > 0 && providerDraft?.isAutomatic) {
+      setProviderDraft(null);
     }
-    return kinds;
-  }, [ai.provider_credentials]);
+  }, [enabledCredentials.length, providerDraft]);
+  const selectedProviderCredential =
+    providerDraft?.credential ??
+    enabledCredentials.find((credential) => credential.id === selectedProviderCredentialId) ??
+    enabledCredentials[0];
+  const selectedProviderConnectionStatus =
+    selectedProviderCredential && !providerDraft
+      ? (providerStatuses[selectedProviderCredential.id] ?? "idle")
+      : providerConnectionStatus;
+  const selectedProviderName =
+    providerNameInput &&
+    selectedProviderCredential &&
+    providerNameInput.credentialId === selectedProviderCredential.id
+      ? providerNameInput.value
+      : (selectedProviderCredential?.name ?? "");
+  const selectedProviderDefaultName = selectedProviderCredential
+    ? defaultProviderName(selectedProviderCredential, enabledCredentials)
+    : "my-provider";
+  const selectedProviderTitle = selectedProviderName.trim() || selectedProviderDefaultName;
+  const selectedProviderNameTaken = providerNameTaken(
+    selectedProviderName,
+    enabledCredentials,
+    selectedProviderCredential?.id,
+  );
+  const selectedProviderEndpointMissing = !selectedProviderCredential?.base_url?.trim();
+  const selectedProviderApiKeyRequired =
+    !!selectedProviderCredential &&
+    selectedProviderCredential.provider_kind !== "ollama" &&
+    selectedProviderCredential.provider_kind !== "openai_compatible";
+  const selectedProviderApiKeyMissing =
+    selectedProviderApiKeyRequired && !selectedProviderCredential?.api_key?.trim();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: These transient fields belong to the selected account.
+  useEffect(() => {
+    setProviderNameInput(null);
+    setShowProviderValidation(false);
+    setEditingModelId(null);
+  }, [selectedProviderCredential?.id]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Switching accounts must hide and discard the previously revealed secret.
+  useEffect(() => {
+    providerApiKeyRevealGeneration.current += 1;
+    setShowProviderApiKey(false);
+    setRevealedProviderApiKey(null);
+    setRevealingProviderApiKey(false);
+  }, [selectedProviderCredential?.id]);
+
+  const hideProviderApiKey = () => {
+    providerApiKeyRevealGeneration.current += 1;
+    setShowProviderApiKey(false);
+    setRevealedProviderApiKey(null);
+    setRevealingProviderApiKey(false);
+  };
+
+  const toggleProviderApiKeyVisibility = async () => {
+    if (!selectedProviderCredential) return;
+    if (showProviderApiKey) {
+      hideProviderApiKey();
+      return;
+    }
+    if (!isCloudSecretMasked(selectedProviderCredential.api_key)) {
+      setShowProviderApiKey(true);
+      return;
+    }
+
+    const credentialId = selectedProviderCredential.id;
+    const generation = ++providerApiKeyRevealGeneration.current;
+    setRevealingProviderApiKey(true);
+    try {
+      const value = await invoke<string>("reveal_ai_provider_api_key", {
+        credentialId,
+      });
+      if (providerApiKeyRevealGeneration.current !== generation) return;
+      setRevealedProviderApiKey({ credentialId, value });
+      setShowProviderApiKey(true);
+    } catch (error) {
+      if (providerApiKeyRevealGeneration.current === generation) {
+        toast.error(getErrorMessage(error));
+      }
+    } finally {
+      if (providerApiKeyRevealGeneration.current === generation) {
+        setRevealingProviderApiKey(false);
+      }
+    }
+  };
 
   const visibleModels = useMemo(() => {
-    return ai.models.filter((model) => {
-      if (model.backend === "codex") return ai.codex.enabled;
-      if (model.credential_id) return enabledProviderKinds.has(model.credential_id);
-      if (model.provider_kind) return enabledProviderKinds.has(model.provider_kind);
-      return false;
-    });
-  }, [ai.models, ai.codex.enabled, enabledProviderKinds]);
+    if (!selectedProviderCredential) return [];
+    if (providerDraft) {
+      return testedDraftModels?.credentialId === selectedProviderCredential.id
+        ? reconcileProviderModels([], selectedProviderCredential, testedDraftModels.names)
+        : [];
+    }
+    const groupKey = groupKeyForCredential(selectedProviderCredential);
+    return ai.models.filter(
+      (model) =>
+        model.backend !== "codex" && (model.credential_id ?? model.provider_kind) === groupKey,
+    );
+  }, [ai.models, selectedProviderCredential, providerDraft, testedDraftModels]);
 
-  const filteredModels = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return visibleModels;
-    return visibleModels.filter((model) => model.name.toLowerCase().includes(q));
-  }, [visibleModels, query]);
+  const hasEnabledModel = ai.models.some(
+    (model) =>
+      model.enabled &&
+      (model.backend === "codex"
+        ? ai.codex.enabled
+        : enabledCredentials.some(
+            (credential) =>
+              groupKeyForCredential(credential) === (model.credential_id ?? model.provider_kind),
+          )),
+  );
 
   const rawGroupedModels = useMemo(
-    () => groupModels(filteredModels, enabledCredentials),
-    [filteredModels, enabledCredentials],
+    () =>
+      groupModels(visibleModels, selectedProviderCredential ? [selectedProviderCredential] : []),
+    [visibleModels, selectedProviderCredential],
   );
 
   const sortOrderRef = useRef<Map<string, string[]>>(new Map());
@@ -977,28 +1305,93 @@ export function AiModelsTab() {
     return sorted;
   }, [rawGroupedModels]);
 
-  const toggleGroupCollapsed = (groupKey: string) => {
-    setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }));
-  };
-
   const updateModels = (models: AIModelConfigItem[]) => {
     update({ models, default_model_id: updateDefaultModelId(ai, models) });
   };
 
-  const canRefreshModels =
-    ai.codex.enabled || ai.provider_credentials.some(supportsCustomModelDiscovery);
-
-  const refreshModels = async () => {
+  const refreshProviders = async () => {
+    if (refreshing || enabledCredentials.length === 0) return;
+    const generation = ++providerListRefreshGeneration.current;
     setRefreshing(true);
+    setProviderModelCount(null);
+    setProviderStatuses((current) => {
+      const next = { ...current };
+      for (const credential of enabledCredentials) next[credential.id] = "testing";
+      return next;
+    });
     try {
-      const refreshedAi = await invoke<AISettings>("refresh_ai_model_settings", { aiSettings: ai });
-      updateAppSettings({ ai: refreshedAi });
-      replaceAppSettings({ ...committedSettings, ai: refreshedAi });
-      toast.success(t("ai.modelsRefreshed"));
-    } catch (error) {
-      toast.error(getErrorMessage(error));
+      const results = await Promise.all(
+        enabledCredentials.map(async (credential) => {
+          try {
+            const names = await invoke<string[]>("test_ai_provider_connection", {
+              aiSettings: ai,
+              credentialId: credential.id,
+            });
+            if (providerListRefreshGeneration.current === generation) {
+              setProviderStatuses((current) => ({ ...current, [credential.id]: "success" }));
+            }
+            return { credential, names };
+          } catch {
+            if (providerListRefreshGeneration.current === generation) {
+              setProviderStatuses((current) => ({ ...current, [credential.id]: "error" }));
+            }
+            return null;
+          }
+        }),
+      );
+      if (providerListRefreshGeneration.current !== generation) return;
+      const successes = results.filter(
+        (result): result is NonNullable<typeof result> => result !== null,
+      );
+      if (successes.length > 0) {
+        updateAppSettings((current) => {
+          let models = current.ai.models;
+          for (const { credential, names } of successes) {
+            if (
+              !current.ai.provider_credentials.some(
+                (item) => item.id === credential.id && item.enabled,
+              )
+            ) {
+              continue;
+            }
+            models = reconcileProviderModels(models, credential, names);
+          }
+          return {
+            ai: {
+              ...current.ai,
+              models,
+              default_model_id: updateDefaultModelId(current.ai, models),
+            },
+          };
+        });
+      }
     } finally {
-      setRefreshing(false);
+      if (providerListRefreshGeneration.current === generation) setRefreshing(false);
+    }
+  };
+
+  const testModel = async (model: AIModelConfigItem) => {
+    if (testingModelId || model.backend !== "genai") return;
+    const generation = ++modelTestGeneration.current;
+    setTestingModelId(model.id);
+    setModelTestResults((previous) => {
+      const next = { ...previous };
+      delete next[model.id];
+      return next;
+    });
+    try {
+      await invoke("test_ai_model_connection", { aiSettings: ai, modelId: model.id });
+      if (modelTestGeneration.current !== generation) return;
+      setModelTestResults((previous) => ({ ...previous, [model.id]: "success" }));
+      toast.success(t("ai.modelTestSucceeded", { model: model.name }));
+    } catch (error) {
+      if (modelTestGeneration.current !== generation) return;
+      setModelTestResults((previous) => ({ ...previous, [model.id]: "error" }));
+      toast.error(t("ai.modelTestFailed", { model: model.name }), {
+        description: getErrorMessage(error),
+      });
+    } finally {
+      if (modelTestGeneration.current === generation) setTestingModelId(null);
     }
   };
 
@@ -1014,6 +1407,17 @@ export function AiModelsTab() {
       return next;
     });
     updateModels(models);
+  };
+
+  const toggleModelReasoningEffort = (model: AIModelConfigItem, effort: AIModelReasoningEffort) => {
+    const selected = new Set(
+      model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS,
+    );
+    if (selected.has(effort)) selected.delete(effort);
+    else selected.add(effort);
+    updateModel(model.id, {
+      supported_reasoning_efforts: MODEL_REASONING_EFFORTS.filter((value) => selected.has(value)),
+    });
   };
 
   const addManualModel = (credential: AIProviderCredential) => {
@@ -1073,9 +1477,10 @@ export function AiModelsTab() {
     toast.success(t("ai.manualModelAdded", { model: name }));
   };
 
-  const removeManualModel = (id: string) => {
+  const removeModel = (id: string) => {
     const model = ai.models.find((item) => item.id === id);
-    if (model?.source !== "manual") return;
+    if (!model) return;
+    setEditingModelId((current) => (current === id ? null : current));
     const models = ai.models.filter((item) => item.id !== id);
     update({
       models,
@@ -1085,6 +1490,17 @@ export function AiModelsTab() {
   };
 
   const updateCredential = (id: string, patch: Partial<AIProviderCredential>) => {
+    if (typeof patch.name === "string" && providerNameTaken(patch.name, enabledCredentials, id)) {
+      return;
+    }
+    invalidateProviderListRefresh();
+    setProviderStatuses((current) => ({ ...current, [id]: "idle" }));
+    cancelProviderConnectionTest();
+    setProviderConnectionStatus("idle");
+    setProviderModelCount(null);
+    if (patch.provider_kind) {
+      patch = { ...patch, api_protocol: null };
+    }
     if (
       patch.provider_kind &&
       !supportsApiFormatSelection({ provider_kind: patch.provider_kind })
@@ -1137,13 +1553,254 @@ export function AiModelsTab() {
     });
   };
 
-  const addCredential = () => {
+  const updateSelectedProviderCredential = (id: string, patch: Partial<AIProviderCredential>) => {
+    if (providerDraft?.credential.id !== id) {
+      updateCredential(id, patch);
+      return;
+    }
+
+    cancelProviderConnectionTest();
+    setProviderConnectionStatus("idle");
+    setProviderModelCount(null);
+    if (patch.provider_kind) {
+      patch = { ...patch, api_protocol: null };
+    }
+    if (
+      patch.provider_kind &&
+      !supportsApiFormatSelection({ provider_kind: patch.provider_kind })
+    ) {
+      patch = { ...patch, api_format: "chat_completions" };
+    }
+    if (
+      "base_url" in patch ||
+      "api_key" in patch ||
+      "api_protocol" in patch ||
+      "api_format" in patch
+    ) {
+      setTestedDraftModels(null);
+    }
+    setProviderDraft((current) =>
+      current?.credential.id === id
+        ? { ...current, isAutomatic: false, credential: { ...current.credential, ...patch } }
+        : current,
+    );
+  };
+
+  const changeCustomProviderIcon = async () => {
+    const credential = selectedProviderCredential;
+    if (!credential || credential.provider_kind !== "openai_compatible") return;
+
+    try {
+      const selectedPath = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: t("dialog.connectionIconFiles"),
+            extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"],
+          },
+        ],
+        title: t("ai.changeProviderIcon"),
+      });
+      if (typeof selectedPath !== "string" || !selectedPath) return;
+
+      const iconDataUrl = await invoke<string>("import_ai_provider_icon", { path: selectedPath });
+      updateSelectedProviderCredential(credential.id, { icon_data_url: iconDataUrl });
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const changeSelectedProviderName = (value: string) => {
+    if (!selectedProviderCredential) return;
+    if (providerDraft) {
+      updateSelectedProviderCredential(selectedProviderCredential.id, { name: value });
+      return;
+    }
+    setProviderNameInput({ credentialId: selectedProviderCredential.id, value });
+    if (
+      value.trim() &&
+      !providerNameTaken(value, enabledCredentials, selectedProviderCredential.id)
+    ) {
+      updateSelectedProviderCredential(selectedProviderCredential.id, { name: value });
+    }
+  };
+
+  const finishSelectedProviderName = () => {
+    if (!selectedProviderCredential || providerDraft) return;
+    const value =
+      providerNameInput?.credentialId === selectedProviderCredential.id
+        ? providerNameInput.value
+        : selectedProviderCredential.name;
+    if (providerNameTaken(value, enabledCredentials, selectedProviderCredential.id)) {
+      toast.error(t("ai.providerNameDuplicate"));
+    } else if (!value.trim()) {
+      updateSelectedProviderCredential(selectedProviderCredential.id, {
+        name: selectedProviderDefaultName,
+      });
+    }
+    setProviderNameInput(null);
+  };
+
+  const updateSelectedProviderProtocol = (credential: AIProviderCredential, value: string) => {
+    const previousProtocol = providerApiProtocol(credential);
+    const api_protocol: AIProviderApiProtocol =
+      value === "chat_completions" || value === "responses"
+        ? "openai_compatible"
+        : (value as AIProviderApiProtocol);
+    const patch: Partial<AIProviderCredential> = {
+      api_protocol,
+      api_format: value === "responses" ? "responses" : "chat_completions",
+    };
+    if (!credential.base_url?.trim()) {
+      patch.base_url =
+        BUILTIN_PROVIDERS[credential.provider_kind]?.defaultBaseUrl ?? credential.base_url;
+    }
+    if (credential.provider_kind === "ollama") {
+      const baseUrl = credential.base_url?.trim();
+      if (previousProtocol === "ollama" && api_protocol === "openai_compatible") {
+        if (baseUrl === "http://localhost:11434/") {
+          patch.base_url = "http://localhost:11434/v1/";
+        }
+      } else if (previousProtocol === "openai_compatible" && api_protocol === "ollama") {
+        if (baseUrl === "http://localhost:11434/v1/") {
+          patch.base_url = "http://localhost:11434/";
+        }
+      }
+    }
+    updateSelectedProviderCredential(credential.id, patch);
+  };
+
+  const selectProviderPreset = (providerKind: AIProviderKind) => {
+    cancelProviderConnectionTest();
+    setProviderModelCount(null);
+    setProviderConnectionStatus("idle");
+    setTestedDraftModels(null);
+    hideProviderApiKey();
+    const providerInfo = BUILTIN_PROVIDERS[providerKind];
+    const providerLabel = getProviderLabel(providerKind);
+    const existingBuiltin = providerInfo
+      ? ai.provider_credentials.find((credential) => credential.id === providerKind)
+      : undefined;
+    let credential: AIProviderCredential;
+    if (providerInfo && existingBuiltin && !existingBuiltin.enabled) {
+      credential = {
+        ...existingBuiltin,
+        name: availableProviderName(
+          existingBuiltin.name.trim() || providerLabel,
+          enabledCredentials,
+        ),
+        api_protocol: null,
+        api_format: "chat_completions",
+        base_url: providerInfo.defaultBaseUrl,
+        enabled: true,
+      };
+    } else {
+      credential = {
+        ...newCredential(),
+        id: providerInfo && !existingBuiltin ? providerKind : `credential-${crypto.randomUUID()}`,
+        name: availableProviderName(providerLabel, enabledCredentials),
+        provider_kind: providerKind,
+        base_url: providerInfo ? providerInfo.defaultBaseUrl : "",
+      };
+    }
+    addProviderCredential(credential);
+  };
+
+  const stageCustomProvider = () => {
+    cancelProviderConnectionTest();
+    setProviderModelCount(null);
+    setProviderConnectionStatus("idle");
+    setTestedDraftModels(null);
+    hideProviderApiKey();
+    setProviderDraft({ credential: newCredential() });
+  };
+
+  const addProviderCredential = (draftCredential: AIProviderCredential) => {
+    const credentialId = draftCredential.id;
+    const name = availableProviderName(
+      draftCredential.name.trim() || defaultProviderName(draftCredential, enabledCredentials),
+      enabledCredentials,
+      credentialId,
+    );
+    invalidateProviderListRefresh();
+    const credential = {
+      ...draftCredential,
+      id: credentialId,
+      name,
+      base_url: draftCredential.base_url?.trim() ?? "",
+      api_key: draftCredential.api_key?.trim() ?? "",
+      enabled: true,
+    };
+    const existingIndex = ai.provider_credentials.findIndex((item) => item.id === credentialId);
+    const providerCredentials = [...ai.provider_credentials];
+    if (existingIndex >= 0) providerCredentials[existingIndex] = credential;
+    else providerCredentials.unshift(credential);
+
+    let models = [...ai.models];
+    const providerInfo = BUILTIN_PROVIDERS[credential.provider_kind];
+    if (providerInfo) {
+      const existingModelIds = new Set(models.map((model) => model.id));
+      for (const name of providerInfo.models) {
+        const id =
+          credentialId === credential.provider_kind
+            ? aiModelIdForProvider(credential.provider_kind, name)
+            : aiModelIdForCredential(credentialId, name);
+        if (existingModelIds.has(id)) continue;
+        models.push({
+          id,
+          name,
+          backend: "genai",
+          provider_kind: credential.provider_kind,
+          credential_id: credentialId === credential.provider_kind ? null : credentialId,
+          enabled: false,
+          source: "rust-genai",
+          last_seen_at: null,
+        });
+      }
+    }
+    if (testedDraftModels?.credentialId === draftCredential.id) {
+      models = reconcileProviderModels(models, credential, testedDraftModels.names);
+    }
+
     update({
-      provider_credentials: [newCredential(), ...ai.provider_credentials],
+      provider_credentials: providerCredentials,
+      models,
+      default_model_id: updateDefaultModelId(ai, models),
     });
+    setProviderDraft(null);
+    setProviderStatuses((current) => ({
+      ...current,
+      [credentialId]:
+        providerDraft?.credential.id === credentialId && providerConnectionStatus === "success"
+          ? "success"
+          : "idle",
+    }));
+    setTestedDraftModels(null);
+    setSelectedProviderCredentialId(credentialId);
+    setProviderNameInput(null);
+    setShowProviderValidation(false);
+    setShowProviderChoices(false);
+    setProviderConnectionStatus("idle");
+    setProviderModelCount(null);
+    cancelProviderConnectionTest();
+  };
+
+  const addCustomProvider = () => {
+    const credential =
+      providerDraft?.credential.provider_kind === "openai_compatible"
+        ? providerDraft.credential
+        : newCredential();
+    addProviderCredential(credential);
   };
 
   const removeCredential = (id: string) => {
+    invalidateProviderListRefresh();
+    setProviderStatuses((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     const models = ai.models.filter((model) => model.credential_id !== id);
     update({
       provider_credentials: ai.provider_credentials.filter((credential) => credential.id !== id),
@@ -1152,269 +1809,650 @@ export function AiModelsTab() {
     });
   };
 
-  return (
-    <div className="space-y-5">
-      <SettingSection title={t("ai.modelList")}>
-        <div className="flex items-center gap-2">
-          <Input
-            value={query}
-            placeholder={t("ai.searchModels")}
-            className="flex-1 text-sm"
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <Button
-            size="icon-sm"
-            variant="outline"
-            disabled={refreshing || !canRefreshModels}
-            onClick={() => void refreshModels()}
-            title={t("ai.refreshModels")}
-          >
-            <MdRefresh className={refreshing ? "animate-spin" : ""} />
-          </Button>
-        </div>
-        <div className="max-h-[22rem] overflow-auto rounded-md border border-border/70 terminal-scroll">
-          {groupedModels.length === 0 ? (
-            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-              {visibleModels.length === 0 ? t("ai.noModels") : t("ai.noModelMatches")}
-            </div>
-          ) : (
-            groupedModels.map((group) => {
-              const isCollapsed = collapsedGroups[group.groupKey] ?? false;
-              const enabledCount = group.models.filter((m) => m.enabled).length;
-              return (
-                <div key={group.groupKey}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-2 text-left text-xs font-semibold hover:bg-muted/50"
-                    onClick={() => toggleGroupCollapsed(group.groupKey)}
-                  >
-                    {isCollapsed ? (
-                      <MdExpandMore className="shrink-0 text-sm" />
-                    ) : (
-                      <MdExpandLess className="shrink-0 text-sm" />
-                    )}
-                    <span className="flex-1 truncate">{group.label}</span>
-                    <span className="shrink-0 text-[0.625rem] font-normal text-muted-foreground">
-                      {enabledCount}/{group.models.length}
-                    </span>
-                  </button>
-                  {!isCollapsed ? (
-                    <>
-                      {group.credential ? (
-                        <div className="border-b border-border/60 px-3 py-2 pl-8">
-                          <div className="flex h-8 overflow-hidden rounded-md border border-border/60 bg-muted/12 transition-colors focus-within:border-primary/45 focus-within:bg-background/70 focus-within:ring-1 focus-within:ring-primary/15">
-                            <Input
-                              value={manualModelNames[group.groupKey] ?? ""}
-                              placeholder={t("ai.manualModelPlaceholder")}
-                              className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 font-mono text-xs shadow-none placeholder:text-muted-foreground/55 focus-visible:border-transparent focus-visible:ring-0"
-                              onChange={(event) =>
-                                setManualModelNames((prev) => ({
-                                  ...prev,
-                                  [group.groupKey]: event.target.value,
-                                }))
-                              }
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" && group.credential) {
-                                  event.preventDefault();
-                                  addManualModel(group.credential);
-                                }
-                              }}
-                            />
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={!manualModelNames[group.groupKey]?.trim()}
-                              title={t("common.add")}
-                              className="h-full rounded-none border-l border-border/60 px-3 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-35"
-                              onClick={() => group.credential && addManualModel(group.credential)}
-                            >
-                              <MdAdd />
-                              {t("common.add")}
-                            </Button>
-                          </div>
-                          {requiresManualCustomModelEntry(group.credential) ? (
-                            <div className="mt-2 text-xs leading-5 text-muted-foreground">
-                              {t("ai.modelDiscoveryUnsupported")} {t("ai.manualModelRequired")}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {group.models.map((model) => (
-                        <div
-                          key={model.id}
-                          className="flex items-center gap-3 border-b border-border/60 px-3 py-2 pl-8 last:border-b-0"
+  const deleteSelectedProvider = () => {
+    if (!selectedProviderCredential) return;
+    if (providerDraft) {
+      setProviderDraft(null);
+      setTestedDraftModels(null);
+    } else {
+      const id = selectedProviderCredential.id;
+      const nextCredential = enabledCredentials.find((credential) => credential.id !== id);
+      if (isBuiltinProvider(id)) {
+        updateCredential(id, { enabled: false });
+      } else {
+        removeCredential(id);
+      }
+      setSelectedProviderCredentialId(nextCredential?.id ?? null);
+    }
+    cancelProviderConnectionTest();
+    setProviderModelCount(null);
+    setProviderConnectionStatus("idle");
+    hideProviderApiKey();
+  };
+
+  const testProviderConnection = async (fromModelList = false) => {
+    if (!selectedProviderCredential) return;
+    const credentialId = selectedProviderCredential.id;
+    const requestGeneration = ++providerConnectionTestGeneration.current;
+    setTestingProviderId(credentialId);
+    if (fromModelList) setRefreshingCurrentModels(true);
+    setProviderModelCount(null);
+    setProviderConnectionStatus("testing");
+    if (!providerDraft) {
+      setProviderStatuses((current) => ({ ...current, [credentialId]: "testing" }));
+    }
+    try {
+      const aiSettings = providerDraft
+        ? {
+            ...ai,
+            provider_credentials: [...ai.provider_credentials, selectedProviderCredential],
+          }
+        : ai;
+      const modelNames = await invoke<string[]>("test_ai_provider_connection", {
+        aiSettings,
+        credentialId,
+      });
+      if (providerConnectionTestGeneration.current === requestGeneration) {
+        setProviderModelCount(modelNames.length);
+        setProviderConnectionStatus("success");
+        if (!providerDraft) {
+          setProviderStatuses((current) => ({ ...current, [credentialId]: "success" }));
+        }
+        if (providerDraft) {
+          setTestedDraftModels({ credentialId, names: modelNames });
+        } else {
+          updateAppSettings((current) => {
+            const models = reconcileProviderModels(
+              current.ai.models,
+              selectedProviderCredential,
+              modelNames,
+            );
+            return {
+              ai: {
+                ...current.ai,
+                models,
+                default_model_id: updateDefaultModelId(current.ai, models),
+              },
+            };
+          });
+        }
+        toast.success(t(fromModelList ? "ai.modelsRefreshed" : "ai.connectionTestSucceeded"));
+      }
+    } catch (error) {
+      if (providerConnectionTestGeneration.current === requestGeneration) {
+        setProviderConnectionStatus("error");
+        if (!providerDraft) {
+          setProviderStatuses((current) => ({ ...current, [credentialId]: "error" }));
+        }
+        toast.error(getErrorMessage(error));
+      }
+    } finally {
+      if (providerConnectionTestGeneration.current === requestGeneration) {
+        if (fromModelList) setRefreshingCurrentModels(false);
+        setTestingProviderId(null);
+      }
+    }
+  };
+
+  const protocolOptions = (credential: AIProviderCredential) => (
+    <>
+      <SelectItem value="chat_completions">{t("ai.providerProtocolChatCompletions")}</SelectItem>
+      <SelectItem value="responses">{t("ai.providerProtocolResponses")}</SelectItem>
+      <SelectItem value="anthropic">{t("ai.providerProtocolAnthropic")}</SelectItem>
+      {(credential.provider_kind === "gemini" ||
+        credential.provider_kind === "openai_compatible") && (
+        <SelectItem value="gemini">{t("ai.providerProtocolGemini")}</SelectItem>
+      )}
+      {credential.provider_kind === "ollama" && (
+        <SelectItem value="ollama">{t("ai.providerProtocolOllama")}</SelectItem>
+      )}
+    </>
+  );
+
+  const renderModelListCard = () => (
+    <SettingSection
+      title={t("ai.modelList")}
+      headerRowClassName="flex-row items-center justify-between sm:items-center"
+      action={
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="outline"
+          disabled={
+            refreshing ||
+            refreshingCurrentModels ||
+            testingProviderId !== null ||
+            !selectedProviderCredential ||
+            selectedProviderEndpointMissing ||
+            selectedProviderApiKeyMissing
+          }
+          onClick={() => void testProviderConnection(true)}
+          title={t("ai.refreshModels")}
+          aria-label={t("ai.refreshModels")}
+        >
+          <MdRefresh className={refreshingCurrentModels ? "animate-spin" : ""} />
+        </Button>
+      }
+    >
+      <div>
+        {groupedModels.length === 0 ? (
+          <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+            {t("ai.noModels")}
+          </div>
+        ) : (
+          groupedModels.map((group) => (
+            <div key={group.groupKey}>
+              {group.credential && !providerDraft ? (
+                <div className="border-b border-border/60 px-3 py-2">
+                  <div className="flex h-8 overflow-hidden rounded-md border border-border/60 bg-muted/12 transition-colors focus-within:border-primary/45 focus-within:bg-background/70 focus-within:ring-1 focus-within:ring-primary/15">
+                    <Input
+                      value={manualModelNames[group.groupKey] ?? ""}
+                      placeholder={t("ai.manualModelPlaceholder")}
+                      className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 font-mono text-xs shadow-none placeholder:text-muted-foreground/55 focus-visible:border-transparent focus-visible:ring-0"
+                      onChange={(event) =>
+                        setManualModelNames((prev) => ({
+                          ...prev,
+                          [group.groupKey]: event.target.value,
+                        }))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && group.credential) {
+                          event.preventDefault();
+                          addManualModel(group.credential);
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!manualModelNames[group.groupKey]?.trim()}
+                      title={t("common.add")}
+                      className="h-full rounded-none border-l border-border/60 px-3 text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary disabled:opacity-35"
+                      onClick={() => group.credential && addManualModel(group.credential)}
+                    >
+                      <MdAdd />
+                      {t("common.add")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {group.models.map((model) => (
+                <div key={model.id} className="border-b border-border/60 last:border-b-0">
+                  <div className="flex items-center gap-3 px-3 py-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <div className="min-w-0 truncate text-xs">{model.name}</div>
+                      {model.backend === "genai" && model.last_seen_at ? (
+                        <Badge
+                          variant="outline"
+                          className="h-5 shrink-0 border-primary/40 bg-primary/10 px-1.5 text-[0.625rem] font-normal text-primary"
                         >
-                          <div className="flex min-w-0 flex-1 items-center gap-2">
-                            <div className="min-w-0 truncate text-xs">{model.name}</div>
-                            {model.source === "manual" ? (
-                              <Badge
-                                variant="outline"
-                                className="h-5 border-border/70 px-1.5 text-[0.625rem] font-normal text-muted-foreground"
-                              >
-                                {t("ai.manualModelBadge")}
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <SettingSwitch
-                            checked={model.enabled}
-                            onChange={(enabled) => updateModel(model.id, { enabled })}
-                          />
-                          {model.source === "manual" ? (
-                            <DeleteIconButton
-                              title={t("ai.deleteManualModel")}
-                              onDelete={() => removeManualModel(model.id)}
-                            />
-                          ) : null}
-                        </div>
-                      ))}
-                    </>
+                          {t("ai.providerReturnedBadge")}
+                        </Badge>
+                      ) : null}
+                      {model.source === "manual" ? (
+                        <Badge
+                          variant="outline"
+                          className="h-5 border-border/70 px-1.5 text-[0.625rem] font-normal text-muted-foreground"
+                        >
+                          {t("ai.manualModelBadge")}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        title={t(
+                          model.backend === "codex"
+                            ? "ai.modelTestUnsupported"
+                            : modelTestResults[model.id] === "success"
+                              ? "ai.modelTestSucceededShort"
+                              : modelTestResults[model.id] === "error"
+                                ? "ai.modelTestFailedShort"
+                                : "ai.testModel",
+                        )}
+                        aria-label={t("ai.testModel")}
+                        className={
+                          modelTestResults[model.id] === "success"
+                            ? "text-emerald-500"
+                            : modelTestResults[model.id] === "error"
+                              ? "text-destructive"
+                              : undefined
+                        }
+                        disabled={
+                          !!providerDraft || model.backend !== "genai" || testingModelId !== null
+                        }
+                        onClick={() => void testModel(model)}
+                      >
+                        <TbPlugConnected
+                          className={`text-[0.95rem] ${
+                            testingModelId === model.id ? "animate-pulse" : ""
+                          }`}
+                        />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        title={t("ai.editModelConfig")}
+                        aria-label={t("ai.editModelConfig")}
+                        aria-expanded={editingModelId === model.id}
+                        aria-controls={`model-config-${encodeURIComponent(model.id)}`}
+                        disabled={!!providerDraft}
+                        onClick={() =>
+                          setEditingModelId((current) => (current === model.id ? null : model.id))
+                        }
+                      >
+                        <MdEdit className="text-[0.95rem]" />
+                      </Button>
+                      <DeleteIconButton
+                        title={t("ai.deleteModel")}
+                        onDelete={() => removeModel(model.id)}
+                        disabled={!!providerDraft}
+                      />
+                    </div>
+                    <SettingSwitch
+                      checked={model.enabled}
+                      disabled={!!providerDraft}
+                      onChange={(enabled) => updateModel(model.id, { enabled })}
+                    />
+                  </div>
+                  {editingModelId === model.id ? (
+                    <div
+                      id={`model-config-${encodeURIComponent(model.id)}`}
+                      className="border-t border-border/60 bg-muted/10 px-3 py-3"
+                    >
+                      <div className="text-xs font-medium">{t("ai.supportedReasoningEfforts")}</div>
+                      <fieldset
+                        aria-label={t("ai.supportedReasoningEfforts")}
+                        className="mt-2 flex flex-wrap gap-2"
+                      >
+                        {MODEL_REASONING_EFFORTS.map((effort) => {
+                          const selected = (
+                            model.supported_reasoning_efforts ?? DEFAULT_MODEL_REASONING_EFFORTS
+                          ).includes(effort);
+                          return (
+                            <Button
+                              key={effort}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              aria-pressed={!!selected}
+                              className={`h-7 px-2.5 text-xs font-normal ${
+                                selected ? "border-primary bg-primary/10 text-primary" : ""
+                              }`}
+                              onClick={() => toggleModelReasoningEffort(model, effort)}
+                            >
+                              {effort}
+                            </Button>
+                          );
+                        })}
+                      </fieldset>
+                    </div>
                   ) : null}
                 </div>
-              );
-            })
-          )}
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+      {enabledCredentials.length === 0 ? (
+        <div className="text-xs text-muted-foreground">{t("ai.manualModelNoProvider")}</div>
+      ) : null}
+      {!hasEnabledModel ? (
+        <div className="text-xs text-amber-600">{t("ai.enableOneModelHint")}</div>
+      ) : null}
+    </SettingSection>
+  );
+
+  return (
+    <div className="space-y-5">
+      <SettingSection title={t("ai.providerList")}>
+        <div className="space-y-3">
+          <div
+            className={`provider-list-scroll flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden px-0.5 py-1 ${providerListScrolling ? "is-scrolling" : ""}`}
+            onScroll={showProviderListScrollbar}
+          >
+            <Button
+              type="button"
+              size="icon-lg"
+              variant="outline"
+              className="rounded-lg border-border/70"
+              disabled={refreshing || testingProviderId !== null || enabledCredentials.length === 0}
+              onClick={() => void refreshProviders()}
+              title={t("ai.refreshProviders")}
+              aria-label={t("ai.refreshProviders")}
+            >
+              <MdRefresh className={refreshing ? "animate-spin" : ""} />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 rounded-lg border-border/70 px-3 text-sm"
+              aria-expanded={showProviderChoices}
+              onClick={() => {
+                setShowProviderChoices(true);
+                stageCustomProvider();
+              }}
+            >
+              <MdAdd />
+              {t("ai.addProvider")}
+            </Button>
+            {enabledCredentials.map((credential) => (
+              <Button
+                key={credential.id}
+                type="button"
+                size="default"
+                variant="outline"
+                className={`h-10 rounded-lg px-3 text-sm font-normal ${
+                  selectedProviderCredential?.id === credential.id
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                    : "border-border/70"
+                }`}
+                aria-pressed={selectedProviderCredential?.id === credential.id}
+                onClick={() => {
+                  cancelProviderConnectionTest();
+                  setProviderDraft(null);
+                  setSelectedProviderCredentialId(credential.id);
+                  setShowProviderChoices(false);
+                  hideProviderApiKey();
+                  setProviderModelCount(null);
+                  setProviderConnectionStatus("idle");
+                }}
+              >
+                <ProviderBadge
+                  kind={credential.provider_kind}
+                  iconDataUrl={credential.icon_data_url}
+                />
+                <span className="min-w-0 max-w-40 truncate">
+                  {credential.name.trim() || getProviderLabel(credential.provider_kind)}
+                </span>
+                <span
+                  role="img"
+                  className={`size-2.5 shrink-0 rounded-full ${
+                    providerStatuses[credential.id] === "testing"
+                      ? "animate-pulse bg-primary"
+                      : providerStatuses[credential.id] === "success"
+                        ? "bg-emerald-500"
+                        : providerStatuses[credential.id] === "error"
+                          ? "bg-destructive"
+                          : "bg-muted-foreground/30"
+                  }`}
+                  title={t(`ai.connectionStatus.${providerStatuses[credential.id] ?? "idle"}`)}
+                  aria-label={t(`ai.connectionStatus.${providerStatuses[credential.id] ?? "idle"}`)}
+                />
+              </Button>
+            ))}
+          </div>
+          {showProviderChoices ? (
+            <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
+              {AI_PROVIDERS.filter((provider) => BUILTIN_PROVIDERS[provider.value]).map(
+                (provider) => (
+                  <Button
+                    key={provider.value}
+                    type="button"
+                    size="default"
+                    variant="outline"
+                    className={`h-10 rounded-lg border-border/70 px-3 text-sm font-normal ${
+                      providerDraft?.credential.provider_kind === provider.value
+                        ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                        : ""
+                    }`}
+                    aria-pressed={providerDraft?.credential.provider_kind === provider.value}
+                    onClick={() => selectProviderPreset(provider.value)}
+                  >
+                    <ProviderBadge kind={provider.value} />
+                    {provider.label}
+                  </Button>
+                ),
+              )}
+              <Button
+                type="button"
+                size="default"
+                variant="outline"
+                className={`h-10 rounded-lg border-border/70 px-3 text-sm font-normal ${
+                  providerDraft?.credential.provider_kind === "openai_compatible"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                    : ""
+                }`}
+                aria-pressed={providerDraft?.credential.provider_kind === "openai_compatible"}
+                onClick={addCustomProvider}
+              >
+                <MdAdd />
+                {t("ai.customProviderOption")}
+              </Button>
+            </div>
+          ) : null}
         </div>
-        {enabledCredentials.length === 0 ? (
-          <div className="text-xs text-muted-foreground">{t("ai.manualModelNoProvider")}</div>
-        ) : null}
-        {visibleModels.every((model) => !model.enabled) ? (
-          <div className="text-xs text-amber-600">{t("ai.enableOneModelHint")}</div>
-        ) : null}
       </SettingSection>
 
-      <SettingSection
-        title={t("ai.apiKeys")}
-        action={
-          <Button size="sm" variant="outline" onClick={addCredential}>
-            <MdAdd />
-            {t("common.add")}
-          </Button>
-        }
-        contentClassName="space-y-4"
-      >
-        {ai.provider_credentials.map((credential) => {
-          const builtin = isBuiltinProvider(credential.id);
-          return (
-            <div
-              key={credential.id}
-              className="rounded-md border border-border/70 bg-background/75 p-4"
-            >
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="min-w-0 truncate text-sm font-medium">{credential.name}</div>
-                <div className="flex items-center gap-2">
-                  <SettingSwitch
-                    checked={credential.enabled}
-                    onChange={(enabled) => updateCredential(credential.id, { enabled })}
-                  />
-                  {!builtin ? (
-                    <DeleteIconButton
-                      title={t("common.delete")}
-                      onDelete={() => removeCredential(credential.id)}
+      {enabledCredentials.length > 0 ? (
+        <SettingSection
+          title={
+            selectedProviderCredential ? (
+              <span className="flex min-w-0 items-center gap-2">
+                {selectedProviderCredential.provider_kind === "openai_compatible" ? (
+                  <button
+                    type="button"
+                    className="group relative size-6 shrink-0 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    onClick={() => void changeCustomProviderIcon()}
+                    title={t("ai.changeProviderIcon")}
+                    aria-label={t("ai.changeProviderIcon")}
+                  >
+                    <ProviderBadge
+                      kind={selectedProviderCredential.provider_kind}
+                      iconDataUrl={selectedProviderCredential.icon_data_url}
                     />
+                    <span className="absolute inset-0 grid place-items-center rounded-full bg-background/80 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                      <MdEdit className="size-3.5" />
+                    </span>
+                  </button>
+                ) : (
+                  <ProviderBadge
+                    kind={selectedProviderCredential.provider_kind}
+                    iconDataUrl={selectedProviderCredential.icon_data_url}
+                  />
+                )}
+                <span className="truncate">{selectedProviderTitle}</span>
+              </span>
+            ) : undefined
+          }
+          className="min-h-24"
+          headerRowClassName="sm:items-center"
+          contentClassName="space-y-0 px-4 py-2 sm:px-5"
+          action={
+            selectedProviderCredential ? (
+              <div className="flex items-center gap-2">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      title={t("ai.deleteProvider")}
+                      aria-label={t("ai.deleteProvider")}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <MdDelete />
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent size="sm">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>{t("ai.deleteProvider")}</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {t(
+                          providerDraft ? "ai.discardProviderConfirm" : "ai.deleteProviderConfirm",
+                          { name: selectedProviderTitle },
+                        )}
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+                      <AlertDialogAction variant="destructive" onClick={deleteSelectedProvider}>
+                        {t("common.delete")}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            ) : undefined
+          }
+        >
+          {selectedProviderCredential ? (
+            <div>
+              <div className="grid gap-2 border-b border-border/60 py-2.5 first:pt-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
+                <Label className="text-xs font-normal">{t("ai.profileName")}</Label>
+                <div className="space-y-1">
+                  <Input
+                    value={selectedProviderName}
+                    placeholder={selectedProviderDefaultName}
+                    className="h-9 rounded-lg text-sm"
+                    aria-invalid={selectedProviderNameTaken}
+                    onChange={(event) => changeSelectedProviderName(event.target.value)}
+                    onBlur={finishSelectedProviderName}
+                  />
+                  {selectedProviderNameTaken ? (
+                    <p className="text-xs text-destructive">{t("ai.providerNameDuplicate")}</p>
                   ) : null}
                 </div>
               </div>
-              {builtin ? (
-                <SettingFieldGrid>
-                  <SettingInput
-                    label={t("settings.apiKey")}
-                    type="password"
-                    placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
-                    value={credential.api_key ?? ""}
+              <div className="grid gap-2 border-b border-border/60 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
+                <Label className="text-xs font-normal">
+                  {t("ai.providerEndpoint")} <span aria-hidden="true">*</span>
+                </Label>
+                <div className="space-y-1">
+                  <Input
+                    value={selectedProviderCredential.base_url ?? ""}
+                    placeholder={getCustomProviderBaseUrlPlaceholder(
+                      selectedProviderCredential.provider_kind,
+                    )}
+                    className="h-9 rounded-lg text-sm"
+                    required
+                    aria-invalid={showProviderValidation && selectedProviderEndpointMissing}
+                    onBlur={() => setShowProviderValidation(true)}
                     onChange={(event) =>
-                      updateCredential(credential.id, {
-                        api_key: event.target.value,
-                      })
-                    }
-                  />
-                  {supportsApiFormatSelection(credential) ? (
-                    <SettingSelect
-                      label={t("ai.apiFormat")}
-                      value={credential.api_format ?? "chat_completions"}
-                      onValueChange={(api_format) =>
-                        updateCredential(credential.id, {
-                          api_format: api_format as AIApiFormat,
-                        })
-                      }
-                    >
-                      <SelectItem value="chat_completions">
-                        {t("ai.apiFormatChatCompletions")}
-                      </SelectItem>
-                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
-                    </SettingSelect>
-                  ) : null}
-                </SettingFieldGrid>
-              ) : (
-                <SettingFieldGrid>
-                  <SettingInput
-                    label={t("ai.profileName")}
-                    value={credential.name}
-                    onChange={(event) =>
-                      updateCredential(credential.id, {
-                        name: event.target.value,
-                      })
-                    }
-                  />
-                  <SettingSelect
-                    label={t("ai.apiProtocol")}
-                    value={credential.provider_kind}
-                    onValueChange={(provider_kind) =>
-                      updateCredential(credential.id, {
-                        provider_kind: provider_kind as AIProviderKind,
-                      })
-                    }
-                    triggerClassName="min-w-0 [&>span]:truncate"
-                  >
-                    {CUSTOM_AI_PROVIDER_PROTOCOLS.map((protocol) => (
-                      <SelectItem key={protocol.value} value={protocol.value}>
-                        {t(protocol.labelKey)}
-                      </SelectItem>
-                    ))}
-                  </SettingSelect>
-                  <SettingInput
-                    label={t("ai.baseUrl")}
-                    desc={t("ai.baseUrlRootHint")}
-                    placeholder={getCustomProviderBaseUrlPlaceholder(credential.provider_kind)}
-                    value={credential.base_url ?? ""}
-                    onChange={(event) =>
-                      updateCredential(credential.id, {
+                      updateSelectedProviderCredential(selectedProviderCredential.id, {
                         base_url: event.target.value,
                       })
                     }
                   />
-                  {supportsApiFormatSelection(credential) ? (
-                    <SettingSelect
-                      label={t("ai.apiFormat")}
-                      value={credential.api_format ?? "chat_completions"}
-                      onValueChange={(api_format) =>
-                        updateCredential(credential.id, {
-                          api_format: api_format as AIApiFormat,
-                        })
-                      }
-                    >
-                      <SelectItem value="chat_completions">
-                        {t("ai.apiFormatChatCompletions")}
-                      </SelectItem>
-                      <SelectItem value="responses">{t("ai.apiFormatResponses")}</SelectItem>
-                    </SettingSelect>
+                  {showProviderValidation && selectedProviderEndpointMissing ? (
+                    <p className="text-xs text-destructive">{t("ai.providerEndpointRequired")}</p>
                   ) : null}
-                  <SettingInput
-                    label={t("settings.apiKey")}
-                    type="password"
-                    placeholder={credential.api_key === "__SET__" ? "__SET__" : "sk-..."}
-                    value={credential.api_key ?? ""}
-                    onChange={(event) =>
-                      updateCredential(credential.id, {
-                        api_key: event.target.value,
-                      })
-                    }
+                </div>
+              </div>
+              <div className="grid gap-2 border-b border-border/60 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
+                <Label className="text-xs font-normal">{t("ai.providerProtocol")}</Label>
+                <Select
+                  value={providerProtocolSelectValue(selectedProviderCredential)}
+                  onValueChange={(value) =>
+                    updateSelectedProviderProtocol(selectedProviderCredential, value)
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full rounded-lg text-left text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>{protocolOptions(selectedProviderCredential)}</SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2 border-b border-border/60 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
+                <Label className="text-xs font-normal">
+                  {t("settings.apiKey")}
+                  {selectedProviderApiKeyRequired ? <span aria-hidden="true"> *</span> : null}
+                </Label>
+                <div className="space-y-1">
+                  <div className="relative">
+                    <Input
+                      data-custom-password-reveal
+                      type={showProviderApiKey ? "text" : "password"}
+                      value={
+                        showProviderApiKey &&
+                        revealedProviderApiKey?.credentialId === selectedProviderCredential.id &&
+                        isCloudSecretMasked(selectedProviderCredential.api_key)
+                          ? revealedProviderApiKey.value
+                          : secretInputValue(selectedProviderCredential.api_key)
+                      }
+                      placeholder={secretPlaceholder(
+                        selectedProviderCredential.api_key,
+                        t("settings.apiKey"),
+                      )}
+                      className="h-9 rounded-lg pr-10 text-sm"
+                      required={selectedProviderApiKeyRequired}
+                      aria-invalid={showProviderValidation && selectedProviderApiKeyMissing}
+                      onBlur={() => setShowProviderValidation(true)}
+                      onChange={(event) => {
+                        setRevealedProviderApiKey(null);
+                        updateSelectedProviderCredential(selectedProviderCredential.id, {
+                          api_key: event.target.value,
+                        });
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                      title={t(showProviderApiKey ? "ai.hideApiKey" : "ai.showApiKey")}
+                      aria-label={t(showProviderApiKey ? "ai.hideApiKey" : "ai.showApiKey")}
+                      disabled={revealingProviderApiKey}
+                      onClick={() => void toggleProviderApiKeyVisibility()}
+                    >
+                      {showProviderApiKey ? (
+                        <MdVisibilityOff className="size-3.5" />
+                      ) : (
+                        <MdVisibility className="size-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                  {showProviderValidation && selectedProviderApiKeyMissing ? (
+                    <p className="text-xs text-destructive">{t("ai.providerApiKeyRequired")}</p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="grid gap-2 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)] sm:items-center">
+                <Label className="text-xs font-normal">{t("ai.connectionTest")}</Label>
+                <div className="flex items-center justify-end gap-2">
+                  {providerModelCount !== null ? (
+                    <span className="text-xs text-muted-foreground">
+                      {t("ai.connectionModelCount", { count: providerModelCount })}
+                    </span>
+                  ) : null}
+                  <span
+                    role="img"
+                    className={`size-2.5 rounded-full ${
+                      selectedProviderConnectionStatus === "testing"
+                        ? "animate-pulse bg-primary"
+                        : selectedProviderConnectionStatus === "success"
+                          ? "bg-emerald-500"
+                          : selectedProviderConnectionStatus === "error"
+                            ? "bg-destructive"
+                            : "bg-muted-foreground/30"
+                    }`}
+                    title={t(`ai.connectionStatus.${selectedProviderConnectionStatus}`)}
+                    aria-label={t(`ai.connectionStatus.${selectedProviderConnectionStatus}`)}
                   />
-                </SettingFieldGrid>
-              )}
+                  <Button
+                    type="button"
+                    className="h-9 rounded-lg px-3 text-sm"
+                    disabled={
+                      selectedProviderEndpointMissing ||
+                      selectedProviderApiKeyMissing ||
+                      refreshing ||
+                      testingProviderId === selectedProviderCredential.id
+                    }
+                    onClick={() => void testProviderConnection()}
+                  >
+                    {t("ai.connectionTest")}
+                  </Button>
+                </div>
+              </div>
             </div>
-          );
-        })}
-      </SettingSection>
+          ) : null}
+        </SettingSection>
+      ) : null}
+
+      {enabledCredentials.length > 0 ? renderModelListCard() : null}
     </div>
   );
 }

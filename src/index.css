@@ -228,6 +228,29 @@
   background: var(--df-scroll-thumb, #30363d);
 }
 
+.provider-list-scroll {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.provider-list-scroll.is-scrolling {
+  scrollbar-color: var(--df-scroll-thumb, #30363d) transparent;
+}
+
+.provider-list-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.provider-list-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.provider-list-scroll.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--df-scroll-thumb, #30363d);
+}
+
 /* ── Security auth responsive rows ─────────────────────────────────────── */
 .security-auth-action-row {
   container-type: inline-size;

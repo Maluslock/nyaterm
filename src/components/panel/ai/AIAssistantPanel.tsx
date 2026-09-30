@@ -43,7 +43,11 @@ import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
 import type { AIErrorDetectedDetail } from "@/lib/aiEvents";
 import { AI_ERROR_DETECTED_EVENT } from "@/lib/aiEvents";
-import { resolveAILanguage, selectDefaultAIModel } from "@/lib/aiSettings";
+import {
+  getModelReasoningOptions,
+  resolveAILanguage,
+  selectDefaultAIModel,
+} from "@/lib/aiSettings";
 import { classifyAIStreamControlEvent } from "@/lib/aiStreamEvent";
 import { getErrorMessage } from "@/lib/errors";
 import { invoke } from "@/lib/invoke";
@@ -198,6 +202,12 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
       (isGenaiModel(storedSelectedModel) ? storedSelectedModel : null) ?? genaiModels[0] ?? null
     );
   }, [genaiModels, runMode, storedSelectedModel]);
+  const configuredReasoningEffort = aiSettings.default_reasoning_effort ?? "auto";
+  const selectedReasoningEffort = getModelReasoningOptions(selectedModel).includes(
+    configuredReasoningEffort,
+  )
+    ? configuredReasoningEffort
+    : "auto";
   const selectableModels = runMode === "ask" || runMode === "nyaterm_agent" ? genaiModels : [];
   const externalModelLabel =
     runMode === "codex_agent"
@@ -296,11 +306,27 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
         })
       : (activePane?.name ?? selectedModel?.name ?? externalModelLabel ?? t("ai.notConfigured"));
   useEffect(() => {
-    if (!selectedModel || selectedModel.id === aiSettings.default_model_id) return;
+    if (!selectedModel) return;
+    if (
+      selectedModel.id === aiSettings.default_model_id &&
+      configuredReasoningEffort === selectedReasoningEffort
+    ) {
+      return;
+    }
     updateAppSettings({
-      ai: { ...aiSettings, default_model_id: selectedModel.id },
+      ai: {
+        ...aiSettings,
+        default_model_id: selectedModel.id,
+        default_reasoning_effort: selectedReasoningEffort,
+      },
     });
-  }, [aiSettings, selectedModel, updateAppSettings]);
+  }, [
+    aiSettings,
+    configuredReasoningEffort,
+    selectedModel,
+    selectedReasoningEffort,
+    updateAppSettings,
+  ]);
 
   const filteredSessions = useMemo(() => {
     const keyword = historyQuery.trim().toLowerCase();
@@ -1987,12 +2013,12 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             />
             <div className="flex w-full items-center justify-between gap-2">
               <div className="flex flex-1 min-w-0 items-center gap-2">
-                <div className="w-1/3 min-w-0">
+                <div className="min-w-0 max-w-[45%] shrink-0">
                   <Select
                     value={runMode}
                     onValueChange={(value) => selectRunMode(value as AIRunMode)}
                   >
-                    <SelectTrigger size="sm" className="w-full text-xs">
+                    <SelectTrigger size="sm" className="w-fit max-w-full text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent position="popper">
@@ -2008,13 +2034,13 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                   </Select>
                 </div>
 
-                <div className="w-2/3 min-w-0">
+                <div className="min-w-0 flex-1">
                   {externalModelLabel ? (
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
-                      className="h-8 w-full min-w-0 justify-start px-2 text-xs"
+                      className="h-8 w-fit max-w-full min-w-0 justify-start px-2 text-xs"
                       disabled
                     >
                       <span className="truncate">{externalModelLabel}</span>
@@ -2024,20 +2050,24 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
                       models={selectableModels}
                       credentials={aiSettings.provider_credentials}
                       selectedModel={selectedModel}
-                      selectedReasoningEffort={aiSettings.default_reasoning_effort ?? "auto"}
+                      selectedReasoningEffort={selectedReasoningEffort}
                       open={modelPopoverOpen}
                       onOpenChange={setModelPopoverOpen}
-                      onSelect={(model) =>
+                      onSelect={(model) => {
+                        const default_reasoning_effort = getModelReasoningOptions(model).includes(
+                          configuredReasoningEffort,
+                        )
+                          ? configuredReasoningEffort
+                          : "auto";
                         updateAppSettings({
-                          ai: { ...aiSettings, default_model_id: model.id },
-                        })
-                      }
+                          ai: { ...aiSettings, default_model_id: model.id, default_reasoning_effort },
+                        });
+                      }}
                       onSelectReasoningEffort={(default_reasoning_effort) =>
                         updateAppSettings({
                           ai: { ...aiSettings, default_reasoning_effort },
                         })
                       }
-                      className="w-full truncate"
                     />
                   )}
                 </div>

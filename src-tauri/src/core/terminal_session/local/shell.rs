@@ -23,23 +23,23 @@ fn default_local_shell_args(program: &str) -> Vec<String> {
     }
 }
 
-fn default_shell_spec() -> ShellCommandSpec {
+pub(crate) fn default_local_shell_path() -> String {
     #[cfg(target_os = "windows")]
     {
-        ShellCommandSpec {
-            program: resolve_program_for_spawn("powershell.exe"),
-            args: Vec::new(),
-            resolution_source: ShellResolutionSource::Direct,
-        }
+        "powershell.exe".to_string()
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-        ShellCommandSpec {
-            args: default_local_shell_args(&program),
-            program,
-            resolution_source: ShellResolutionSource::Direct,
-        }
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
+fn default_shell_spec() -> ShellCommandSpec {
+    let program = default_local_shell_path();
+    ShellCommandSpec {
+        args: default_local_shell_args(&program),
+        program: resolve_program_for_spawn(&program),
+        resolution_source: ShellResolutionSource::Direct,
     }
 }
 

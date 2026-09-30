@@ -58,6 +58,21 @@ fn unescape_iac_iac(data: &[u8]) -> Vec<u8> {
     visible
 }
 
+fn escape_telnet_application_data(data: &[u8], raw_tcp_cli: bool) -> Vec<u8> {
+    if raw_tcp_cli {
+        return data.to_vec();
+    }
+
+    let mut escaped = Vec::with_capacity(data.len());
+    for &byte in data {
+        escaped.push(byte);
+        if byte == IAC {
+            escaped.push(IAC);
+        }
+    }
+    escaped
+}
+
 /// Strip IAC sequences from raw data, returning only user-visible bytes.
 /// Calls `on_negotiate` for each IAC command/option pair encountered.
 fn strip_telnet_commands(data: &[u8], on_negotiate: &mut impl FnMut(u8, u8)) -> Vec<u8> {

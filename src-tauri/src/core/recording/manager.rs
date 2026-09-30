@@ -1,5 +1,6 @@
 pub struct RecordingManager {
-    sessions: RwLock<HashMap<String, Arc<SessionRecorder>>>,
+    scopes: RwLock<HashMap<String, Arc<SessionRecorder>>>,
+    session_scopes: RwLock<HashMap<String, String>>,
     memory_limit_bytes: AtomicUsize,
     app_handle: OnceLock<tauri::AppHandle>,
 }
@@ -7,7 +8,8 @@ pub struct RecordingManager {
 impl RecordingManager {
     pub fn new() -> Self {
         Self {
-            sessions: RwLock::new(HashMap::new()),
+            scopes: RwLock::new(HashMap::new()),
+            session_scopes: RwLock::new(HashMap::new()),
             memory_limit_bytes: AtomicUsize::new(DEFAULT_MEMORY_LIMIT_BYTES),
             app_handle: OnceLock::new(),
         }
@@ -218,7 +220,7 @@ impl RecordingManager {
         let bounded = max_bytes.max(1);
         self.memory_limit_bytes.store(bounded, Ordering::Relaxed);
 
-        for state in rw_read_recover(&self.sessions).values() {
+        for state in rw_read_recover(&self.scopes).values() {
             state.set_memory_limit(bounded);
         }
     }
@@ -229,12 +231,13 @@ impl RecordingManager {
     }
 
     pub fn list_recording_sessions(&self) -> Vec<String> {
-        rw_read_recover(&self.sessions)
-            .iter()
-            .filter_map(|(id, state)| {
+        rw_read_recover(&self.scopes)
+            .values()
+            .filter_map(|state| {
                 lock_recover(&state.runtime)
-                    .is_recording()
-                    .then(|| id.clone())
+                    .sink
+                    .as_ref()
+                    .map(|sink| sink.status.snapshot().session_id)
             })
             .collect()
     }
@@ -246,7 +249,7 @@ impl RecordingManager {
     }
 
     pub fn list_recording_statuses(&self) -> Vec<RecordingStatus> {
-        rw_read_recover(&self.sessions)
+        rw_read_recover(&self.scopes)
             .values()
             .filter_map(|recorder| {
                 lock_recover(&recorder.runtime)
@@ -316,11 +319,79 @@ impl RecordingManager {
         }
     }
 
-    pub fn cleanup_session(&self, session_id: &str) {
-        let removed = {
-            let mut sessions = rw_write_recover(&self.sessions);
-            sessions.remove(session_id)
+    pub fn bind_session_scope(&self, session_id: &str, scope_id: &str) -> bool {
+        let scope_id = if scope_id.is_empty() {
+            session_id
+        } else {
+            scope_id
         };
+        let (recorder, is_new) = {
+            let mut scopes = rw_write_recover(&self.scopes);
+            let is_new = !scopes.contains_key(scope_id);
+            let recorder = scopes
+                .entry(scope_id.to_string())
+                .or_insert_with(|| {
+                    Arc::new(SessionRecorder::new(
+                        self.memory_limit_bytes.load(Ordering::Relaxed),
+                    ))
+                })
+                .clone();
+            (recorder, is_new)
+        };
+        rw_write_recover(&self.session_scopes).insert(session_id.to_string(), scope_id.to_string());
+        {
+            let mut lifecycle = lock_recover(&recorder.lifecycle);
+            lifecycle.active_sessions.insert(session_id.to_string());
+        }
+        if !is_new {
+            let runtime = lock_recover(&recorder.runtime);
+            if let Some(sink) = runtime.sink.as_ref() {
+                sink.status.set_session_id(session_id);
+            }
+            drop(runtime);
+            self.record_system(session_id, "Session reconnected");
+        }
+        is_new
+    }
+
+    pub fn disconnect_session(&self, session_id: &str) {
+        let Some(recorder) = self.get_recorder(session_id) else {
+            return;
+        };
+        let flushed = lock_recover(&recorder.transcript).finish();
+        self.write_transcript_records(&recorder, &flushed);
+        self.record_system(session_id, "Session disconnected");
+        let finalize = {
+            let mut lifecycle = lock_recover(&recorder.lifecycle);
+            lifecycle.active_sessions.remove(session_id);
+            lifecycle.finalize_pending && lifecycle.active_sessions.is_empty()
+        };
+        if finalize {
+            self.finish_scope(&self.resolve_scope(session_id));
+        } else if self.resolve_scope(session_id) == session_id {
+            self.finish_scope(session_id);
+        }
+    }
+
+    pub fn finish_scope(&self, scope_id: &str) {
+        let resolved = self.resolve_scope(scope_id);
+        let scope_id = if rw_read_recover(&self.scopes).contains_key(scope_id) {
+            scope_id
+        } else {
+            resolved.as_str()
+        };
+        let Some(recorder) = rw_read_recover(&self.scopes).get(scope_id).cloned() else {
+            return;
+        };
+        {
+            let mut lifecycle = lock_recover(&recorder.lifecycle);
+            if !lifecycle.active_sessions.is_empty() {
+                lifecycle.finalize_pending = true;
+                return;
+            }
+        }
+        let removed = rw_write_recover(&self.scopes).remove(scope_id);
+        rw_write_recover(&self.session_scopes).retain(|_, scope| scope != scope_id);
         if let Some(recorder) = removed {
             let flushed = {
                 let mut transcript = lock_recover(&recorder.transcript);
@@ -347,17 +418,38 @@ impl RecordingManager {
         }
     }
 
+    pub fn finish_all_scopes(&self) {
+        let scope_ids: Vec<_> = rw_read_recover(&self.scopes).keys().cloned().collect();
+        for scope_id in scope_ids {
+            if let Some(recorder) = rw_read_recover(&self.scopes).get(&scope_id) {
+                let mut lifecycle = lock_recover(&recorder.lifecycle);
+                lifecycle.active_sessions.clear();
+            }
+            self.finish_scope(&scope_id);
+        }
+    }
+
+    fn resolve_scope(&self, session_id: &str) -> String {
+        rw_read_recover(&self.session_scopes)
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| session_id.to_string())
+    }
+
     fn get_recorder(&self, session_id: &str) -> Option<Arc<SessionRecorder>> {
-        rw_read_recover(&self.sessions).get(session_id).cloned()
+        rw_read_recover(&self.scopes)
+            .get(&self.resolve_scope(session_id))
+            .cloned()
     }
 
     fn get_or_create_recorder(&self, session_id: &str) -> Arc<SessionRecorder> {
         if let Some(recorder) = self.get_recorder(session_id) {
             return recorder;
         }
-        let mut sessions = rw_write_recover(&self.sessions);
-        sessions
-            .entry(session_id.to_string())
+        let scope_id = self.resolve_scope(session_id);
+        let mut scopes = rw_write_recover(&self.scopes);
+        scopes
+            .entry(scope_id)
             .or_insert_with(|| {
                 Arc::new(SessionRecorder::new(
                     self.memory_limit_bytes.load(Ordering::Relaxed),
@@ -366,7 +458,11 @@ impl RecordingManager {
             .clone()
     }
 
-    fn write_transcript_records(&self, recorder: &Arc<SessionRecorder>, records: &[TranscriptRecord]) {
+    fn write_transcript_records(
+        &self,
+        recorder: &Arc<SessionRecorder>,
+        records: &[TranscriptRecord],
+    ) {
         if records.is_empty() {
             return;
         }
@@ -399,13 +495,10 @@ fn should_write_transcript(runtime: &RecordingRuntime) -> bool {
 }
 
 fn should_write_raw(runtime: &RecordingRuntime) -> bool {
-    runtime
-        .profile
-        .as_ref()
-        .is_some_and(|profile| {
-            let _include_binary_transfer_payloads = profile.include_binary_transfer_payloads;
-            profile.mode == RecordingMode::Raw
-        })
+    runtime.profile.as_ref().is_some_and(|profile| {
+        let _include_binary_transfer_payloads = profile.include_binary_transfer_payloads;
+        profile.mode == RecordingMode::Raw
+    })
 }
 
 fn maybe_rotate(runtime: &mut RecordingRuntime) {
@@ -427,8 +520,10 @@ fn maybe_rotate(runtime: &mut RecordingRuntime) {
             if next_key != runtime.daily_key {
                 let mut next_context = context.clone();
                 next_context.started_at = now;
-                if let Ok(path) = resolve_recording_path(&profile, &next_context, None)
-                    .and_then(|path| open_collision_safe_path(&path, profile.existing_file_behavior))
+                if let Ok(path) =
+                    resolve_recording_path(&profile, &next_context, None).and_then(|path| {
+                        open_collision_safe_path(&path, profile.existing_file_behavior)
+                    })
                 {
                     sink.enqueue(
                         format_record_parts(
@@ -459,12 +554,11 @@ fn maybe_rotate(runtime: &mut RecordingRuntime) {
                     >= max_bytes
             {
                 runtime.size_rotation_index = runtime.size_rotation_index.saturating_add(1);
-                if let Ok(path) = resolve_recording_path(
-                    &profile,
-                    &context,
-                    Some(runtime.size_rotation_index),
-                )
-                .and_then(|path| open_collision_safe_path(&path, profile.existing_file_behavior))
+                if let Ok(path) =
+                    resolve_recording_path(&profile, &context, Some(runtime.size_rotation_index))
+                        .and_then(|path| {
+                            open_collision_safe_path(&path, profile.existing_file_behavior)
+                        })
                 {
                     sink.enqueue(
                         format_record_parts(

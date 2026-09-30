@@ -29,12 +29,15 @@ import {
   MdContentCopy,
   MdCreateNewFolder,
   MdDriveFolderUpload,
+  MdFolderOpen,
   MdFolderOff,
   MdInfo,
   MdLink,
   MdNoteAdd,
+  MdOpenInNew,
   MdRefresh,
   MdSyncLock,
+  MdTerminal,
   MdUpload,
 } from "react-icons/md";
 import { PiColumnsPlusRightBold } from "react-icons/pi";
@@ -80,7 +83,16 @@ import { getErrorMessage } from "@/lib/errors";
 import { MAX_EDITOR_FILE_BYTES } from "@/lib/fileEditorLimits";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
-import { sendSessionInput, sendSessionInputWithSync } from "@/lib/sessionInput";
+import {
+  buildTerminalCommandInput,
+  sendSessionInput,
+  sendSessionInputWithSync,
+} from "@/lib/sessionInput";
+import {
+  buildDirectoryChangeCommand,
+  getDirectoryShell,
+} from "@/lib/terminalSessionCwd";
+import { isWindows } from "@/lib/platform";
 import {
   selectionToClipboardEntries,
   type FileClipboardMode,
@@ -89,9 +101,14 @@ import { matchesKeyEvent } from "@/lib/shortcutRegistry";
 import { getSessionInputPeerIds } from "@/lib/syncInputGroups";
 import { cn, formatSize } from "@/lib/utils";
 import type { FileWindowTarget } from "@/lib/windowManager";
-import { openAutoUpload, openFilePreview, openRemoteFileEditor } from "@/lib/windowManager";
+import {
+  openAutoUpload,
+  openFilePreview,
+  openRemoteFileEditor,
+} from "@/lib/windowManager";
 import {
   findOpenFileDocument,
+  findSessionPaneBySessionId,
   findSessionPaneById,
 } from "@/lib/workspaceTabs";
 import type {
@@ -634,6 +651,7 @@ function FileExplorer(props: FileExplorerProps) {
               activeSessionType={toFileExplorerSessionType(selectedTarget)}
               activeConnectionId={null}
               activeSessionName={selectedTarget.name}
+              onOpenDirectoryInNewTerminal={props.onOpenDirectoryInNewTerminal}
               headerMeta={`${selectedTarget.name} · ${
                 selectedTarget.connected
                   ? t("fileExplorer.connected")
@@ -704,6 +722,7 @@ function FileExplorerPane({
   activeConnectionId,
   activeSessionName,
   terminalInputEnabled = true,
+  onOpenDirectoryInNewTerminal,
   headerMeta,
   headerActions,
   peerEndpoint,
@@ -2226,6 +2245,85 @@ function FileExplorerPane({
       emit(`focus-terminal-${activeSessionId}`).catch(() => {});
     },
     [activeSessionId, broadcastToAll, syncGroups, tabs, terminalInputEnabled],
+  );
+
+  const enterDirectoryInTerminal = useCallback(
+    async (path: string) => {
+      if (!activeSessionId || !terminalInputEnabled) {
+        toast.error(t("fileExplorer.directoryTerminalUnavailable"));
+        return;
+      }
+      const pane = tabs
+        .map((tab) => findSessionPaneBySessionId(tab.root, activeSessionId))
+        .find((candidate) => candidate?.paneKind === "terminal");
+      try {
+        const sessions = await invoke<SessionInfo[]>("list_sessions");
+        const session = sessions.find(
+          (candidate) => candidate.id === activeSessionId,
+        );
+        if (
+          !pane ||
+          !session?.connected ||
+          session.ssh_runtime_mode === "sftp"
+        ) {
+          toast.error(t("fileExplorer.directoryTerminalUnavailable"));
+          return;
+        }
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+        return;
+      }
+      const connectionId = pane?.connectionId ?? activeConnectionId;
+      const shellPath = savedConnections.find(
+        (connection) => connection.id === connectionId,
+      )?.shell_path;
+      const shell =
+        activeSessionType === "SSH"
+          ? "posix"
+          : getDirectoryShell(shellPath, isWindows);
+      if (!shell) {
+        toast.error(t("fileExplorer.directoryTerminalUnavailable"));
+        return;
+      }
+      const command = buildDirectoryChangeCommand(
+        path,
+        shell,
+        activeSessionType === "Local" && isWindows && shell === "posix",
+      );
+      if (!command) {
+        toast.error(t("fileExplorer.directoryTerminalInvalidPath"));
+        return;
+      }
+      try {
+        await sendSessionInput(
+          activeSessionId,
+          buildTerminalCommandInput(command, true),
+        );
+        void emit(`focus-terminal-${activeSessionId}`);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      }
+    },
+    [
+      activeConnectionId,
+      activeSessionId,
+      activeSessionType,
+      savedConnections,
+      t,
+      tabs,
+      terminalInputEnabled,
+    ],
+  );
+
+  const openDirectoryInNewTerminal = useCallback(
+    (path: string) => {
+      if (!activeSessionId || !onOpenDirectoryInNewTerminal) {
+        toast.error(t("fileExplorer.directoryTerminalUnavailable"));
+        return;
+      }
+      onOpenDirectoryInNewTerminal(activeSessionId, path);
+    },
+    [activeSessionId, onOpenDirectoryInNewTerminal, t],
   );
 
   const handleSendCurrentPathToTerminal = () => {
@@ -4231,7 +4329,13 @@ function FileExplorerPane({
                           }
                           canPaste={fileClipboard.canPaste}
                           onSendToTerminal={
-                            terminalInputEnabled ? handleSendToTerminal : undefined
+                            terminalInputEnabled
+                              ? handleSendToTerminal
+                              : undefined
+                          }
+                          onEnterDirectoryInTerminal={enterDirectoryInTerminal}
+                          onOpenDirectoryInNewTerminal={
+                            openDirectoryInNewTerminal
                           }
                           onProperties={(entry) => {
                             if (activeSessionId) {
@@ -4330,12 +4434,20 @@ function FileExplorerPane({
             onDownload={handleTreeDownload}
             onSendToPeer={handleTreeSendToPeer}
             onSendToTarget={handleTreeSendToTarget}
-            onRename={(row) => beginInlineRename(row.entry, row.path, row.parentPath)}
+            onRename={(row) =>
+              beginInlineRename(row.entry, row.path, row.parentPath)
+            }
             onMove={handleTreeMove}
             onDelete={handleTreeDelete}
             onAddToFavorites={handleTreeAddToFavorites}
             onCopyPath={handleTreeCopyPath}
             onSendToTerminal={handleTreeSendToTerminal}
+            onEnterDirectoryInTerminal={(row) =>
+              void enterDirectoryInTerminal(row.path)
+            }
+            onOpenDirectoryInNewTerminal={(row) =>
+              openDirectoryInNewTerminal(row.path)
+            }
             onProperties={handleTreeProperties}
             onAIAction={handleTreeAIAction}
           />
@@ -4409,10 +4521,31 @@ function FileExplorerPane({
               {t("fileExplorer.copyDirPath")}
             </ContextMenuItem>
             {terminalInputEnabled ? (
-              <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
-                <LuClipboardPaste className="mr-2 h-4 w-4" />
-                {t("fileExplorer.sendDirPathToTerminal")}
-              </ContextMenuItem>
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <MdTerminal className="mr-2 h-4 w-4" />
+                  {t("fileExplorer.cmTerminal")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  <ContextMenuItem
+                    onClick={() => void enterDirectoryInTerminal(currentPath)}
+                  >
+                    <MdFolderOpen className="mr-2 h-4 w-4" />
+                    {t("fileExplorer.cmEnterDirectory")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => openDirectoryInNewTerminal(currentPath)}
+                  >
+                    <MdOpenInNew className="mr-2 h-4 w-4" />
+                    {t("fileExplorer.cmOpenDirectoryNewTerminal")}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={handleSendCurrentPathToTerminal}>
+                    <LuClipboardPaste className="mr-2 h-4 w-4" />
+                    {t("fileExplorer.sendDirPathToTerminal")}
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
             ) : null}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => handleCurrentDirProperties()}>

@@ -4,6 +4,9 @@ use super::*;
 
 impl SftpBackend {
     pub(super) async fn resolve_uid_names(&self, uids: HashSet<u32>) -> HashMap<u32, String> {
+        if !self.shell_available {
+            return HashMap::new();
+        }
         let missing: Vec<u32> = {
             let cache = self.identity_cache.read().await;
             uids.iter()
@@ -54,6 +57,9 @@ impl SftpBackend {
     }
 
     pub(super) async fn resolve_gid_names(&self, gids: HashSet<u32>) -> HashMap<u32, String> {
+        if !self.shell_available {
+            return HashMap::new();
+        }
         let missing: Vec<u32> = {
             let cache = self.identity_cache.read().await;
             gids.iter()

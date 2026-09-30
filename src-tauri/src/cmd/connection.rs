@@ -90,7 +90,7 @@ pub fn import_connection_icon(
     Ok(icon)
 }
 
-fn import_connection_icon_data_url(path: &str) -> AppResult<String> {
+pub(crate) fn import_connection_icon_data_url(path: &str) -> AppResult<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err(AppError::Config(

@@ -17,11 +17,12 @@ type SettingFieldShellProps = SettingMetaProps & {
 };
 
 type SettingSectionProps = {
-  title?: string;
+  title?: React.ReactNode;
   desc?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
+  headerRowClassName?: string;
   contentClassName?: string;
 };
 
@@ -55,6 +56,7 @@ export function SettingSection({
   action,
   children,
   className,
+  headerRowClassName,
   contentClassName,
 }: SettingSectionProps) {
   return (
@@ -63,7 +65,12 @@ export function SettingSection({
     >
       {(title || desc || action) && (
         <div className="flex flex-col gap-3 border-b border-border/60 px-4 py-4 sm:px-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div
+            className={cn(
+              "flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between",
+              headerRowClassName,
+            )}
+          >
             {(title || desc) && (
               <div className="min-w-0">
                 {title && <h3 className="text-sm font-semibold leading-5">{title}</h3>}

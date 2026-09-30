@@ -304,15 +304,12 @@ fn serial_session_thread(
             SessionCommand::DetachRenderer => {
                 output.detach();
             }
-            SessionCommand::Write { mut data, .. } => {
+            SessionCommand::Write { data, raw, .. } => {
                 if zmodem_state.lock().unwrap().is_some() || xymodem_state.lock().unwrap().is_some()
                 {
                     continue;
                 }
-                if backspace_as_bs {
-                    remap_del_to_bs(&mut data);
-                }
-                let send_data = encode_terminal_input(&data, &encoding);
+                let send_data = prepare_terminal_write_input(data, &encoding, raw, backspace_as_bs);
                 let mut p = port_writer.lock().unwrap();
                 let _ = p.write_all(&send_data);
                 let _ = p.flush();
@@ -516,7 +513,7 @@ fn serial_session_thread(
     output.close();
 
     if let Some(ref recorder) = recording_mgr {
-        recorder.cleanup_session(&session_id);
+        recorder.disconnect_session(&session_id);
     }
 
     rt_handle.block_on(async {

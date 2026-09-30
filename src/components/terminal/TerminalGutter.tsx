@@ -21,6 +21,8 @@ interface GutterLine {
 
 interface GutterLayout {
   lines: GutterLine[];
+  maxLineNumberDigits: number;
+  sessionId?: string;
   rowHeight: number;
   topPadding: number;
   fontFamily: string;
@@ -30,9 +32,18 @@ interface GutterLayout {
 
 const DEFAULT_TIMESTAMP_FORMAT = "[HH:mm:ss]";
 const MAX_TIMESTAMP_FORMAT_LENGTH = 64;
-const TIMESTAMP_WIDTH_SAMPLE_MS = new Date(2099, 11, 28, 23, 59, 59, 999).getTime();
+const TIMESTAMP_WIDTH_SAMPLE_MS = new Date(
+  2099,
+  11,
+  28,
+  23,
+  59,
+  59,
+  999,
+).getTime();
 const GUTTER_COLUMN_GAP = 12;
 const GUTTER_RIGHT_PADDING = 8;
+const MAX_TIMESTAMP_LOOKBACK_ROWS = 512;
 
 function normalizeTimestampFormat(format: string | undefined): string {
   if (!format || format.trim().length === 0) {
@@ -127,6 +138,8 @@ export default function TerminalGutter({
 
   const [layout, setLayout] = useState<GutterLayout>({
     lines: [],
+    maxLineNumberDigits: 1,
+    sessionId,
     rowHeight: 18,
     topPadding: 0,
     fontFamily: "inherit",
@@ -144,7 +157,8 @@ export default function TerminalGutter({
     const viewport = el.querySelector(".xterm-viewport") as HTMLElement | null;
 
     const screen = el.querySelector(".xterm-screen") as HTMLElement | null;
-    const screenHeight = viewport?.clientHeight ?? screen?.clientHeight ?? el.clientHeight;
+    const screenHeight =
+      viewport?.clientHeight ?? screen?.clientHeight ?? el.clientHeight;
     const topPadding = screen?.offsetTop ?? 0;
 
     const core = (terminal as Terminal & XTermCoreWithRenderDimensions)._core;
@@ -157,8 +171,13 @@ export default function TerminalGutter({
           : 18;
     const fontSize = Number(terminal.options.fontSize ?? 12);
     const cellWidth =
-      measuredCell?.width && measuredCell.width > 0 ? measuredCell.width : fontSize * 0.62;
-    const viewportY = Math.max(0, Math.min(buf.baseY, viewportYRef.current || buf.viewportY));
+      measuredCell?.width && measuredCell.width > 0
+        ? measuredCell.width
+        : fontSize * 0.62;
+    const viewportY = Math.max(
+      0,
+      Math.min(buf.baseY, viewportYRef.current || buf.viewportY),
+    );
     const rows = terminal.rows;
     const cursorAbsoluteY = buf.baseY + buf.cursorY;
     const lineOffset = buf.type === "alternate" ? 0 : getLineOffset();
@@ -166,8 +185,11 @@ export default function TerminalGutter({
     const resolveTimestamp = (bufferLine: number): number | undefined => {
       let y = bufferLine;
 
-      while (y >= 0) {
-        const ts = buf.type === "alternate" ? undefined : lineTimestamps.get(lineOffset + y);
+      while (y >= 0 && bufferLine - y < MAX_TIMESTAMP_LOOKBACK_ROWS) {
+        const ts =
+          buf.type === "alternate"
+            ? undefined
+            : lineTimestamps.get(lineOffset + y);
         if (ts) return ts;
 
         const line = buf.getLine(y);
@@ -185,7 +207,7 @@ export default function TerminalGutter({
       const line = buf.getLine(bufferLine);
       const isWrapped = line?.isWrapped ?? false;
       const hasRenderedRow = bufferLine <= cursorAbsoluteY;
-      const ts = resolveTimestamp(bufferLine);
+      const ts = showTimestamps ? resolveTimestamp(bufferLine) : undefined;
       const logicalLine = lineOffset + bufferLine;
 
       nextLines.push({
@@ -194,18 +216,31 @@ export default function TerminalGutter({
           showTimestamps && hasRenderedRow && !isWrapped && ts
             ? formatTimestamp(ts, timestampFormat)
             : "",
-        lineNumber: showLineNumbers && hasRenderedRow && !isWrapped ? String(logicalLine + 1) : "",
+        lineNumber:
+          showLineNumbers && hasRenderedRow && !isWrapped
+            ? String(logicalLine + 1)
+            : "",
       });
     }
 
-    setLayout({
+    const visibleLineNumberDigits = nextLines.reduce(
+      (max, line) => Math.max(max, line.lineNumber.length),
+      1,
+    );
+
+    setLayout((previous) => ({
       lines: nextLines,
+      maxLineNumberDigits:
+        previous.sessionId === sessionId
+          ? Math.max(previous.maxLineNumberDigits, visibleLineNumberDigits)
+          : visibleLineNumberDigits,
+      sessionId,
       rowHeight,
       topPadding,
       fontFamily: String(terminal.options.fontFamily ?? "inherit"),
       fontSize,
       cellWidth,
-    });
+    }));
   }, [
     suspended,
     terminalRef,
@@ -214,6 +249,7 @@ export default function TerminalGutter({
     showLineNumbers,
     showTimestamps,
     timestampFormat,
+    sessionId,
   ]);
 
   const scheduleUpdate = useCallback(() => {
@@ -287,7 +323,10 @@ export default function TerminalGutter({
         d.dispose();
       });
       if (handleExternalRefresh) {
-        window.removeEventListener("nyaterm:refresh-gutter", handleExternalRefresh);
+        window.removeEventListener(
+          "nyaterm:refresh-gutter",
+          handleExternalRefresh,
+        );
       }
     };
   }, [suspended, terminalRef, scheduleUpdate, sessionId]);
@@ -301,15 +340,16 @@ export default function TerminalGutter({
     return null;
   }
 
-  const maxVisibleLineNumber = layout.lines.reduce((max, line) => {
-    const value = Number(line.lineNumber);
-    return Number.isFinite(value) ? Math.max(max, value) : max;
-  }, 1);
   const lineNumWidth = showLineNumbers
-    ? Math.max(Math.ceil(layout.cellWidth * String(maxVisibleLineNumber).length) + 2, 24)
+    ? Math.max(Math.ceil(layout.cellWidth * layout.maxLineNumberDigits) + 2, 24)
     : 0;
-  const timestampTemplate = formatTimestamp(TIMESTAMP_WIDTH_SAMPLE_MS, timestampFormat);
-  const tsWidth = showTimestamps ? Math.ceil(layout.cellWidth * timestampTemplate.length) + 2 : 0;
+  const timestampTemplate = formatTimestamp(
+    TIMESTAMP_WIDTH_SAMPLE_MS,
+    timestampFormat,
+  );
+  const tsWidth = showTimestamps
+    ? Math.ceil(layout.cellWidth * timestampTemplate.length) + 2
+    : 0;
   const columnGap = showLineNumbers && showTimestamps ? GUTTER_COLUMN_GAP : 0;
   const gutterWidth = tsWidth + lineNumWidth + columnGap + GUTTER_RIGHT_PADDING;
 

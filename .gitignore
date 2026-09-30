@@ -16,6 +16,7 @@ dist-ssr
 *.local
 target/
 src-tauri/binaries/nyaterm-mcp-*
+src-tauri/resources/windows/conpty/
 temp/
 
 # Local reference checkout of WindTerm (not project source).

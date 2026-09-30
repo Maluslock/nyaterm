@@ -683,7 +683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         : [...tabsRef.current, newTab];
       void commitTabs(nextTabs);
       setActiveTabId(newTab.id);
-      return { tabId: newTab.id, createRequestId };
+      return { tabId: newTab.id, paneId: pane.id, createRequestId };
     },
     [commitTabs, setActiveTabId],
   );
@@ -1120,6 +1120,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               tasks.push(invoke<string>("create_ssh_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
+                recordingScopeId: pane.id,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId, cid))
                 .catch((e) =>
@@ -1130,6 +1131,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               tasks.push(invoke<string>("create_local_session", {
                 connectionId: cid || null,
                 createRequestId: pane.createRequestId,
+                recordingScopeId: pane.id,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
@@ -1144,6 +1146,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               tasks.push(invoke<string>("create_telnet_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
+                recordingScopeId: pane.id,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>
@@ -1158,6 +1161,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               tasks.push(invoke<string>("create_serial_session", {
                 connectionId: cid,
                 createRequestId: pane.createRequestId,
+                recordingScopeId: pane.id,
               })
                 .then((sessionId) => handleRestoredSessionCreated(tab.id, pane.id, sessionId))
                 .catch((e) =>

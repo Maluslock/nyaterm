@@ -84,6 +84,7 @@ export async function closeStaleCreatedSession(sessionId: string) {
   try {
     await attachSessionBeforeClose(sessionId);
     await invoke("close_session", { sessionId });
+    await invoke("finish_recording_scope", { scopeId: sessionId });
     clearSessionCommandHistory(sessionId);
   } catch (error) {
     logger.error({
@@ -101,23 +102,27 @@ export async function createSessionForConnection(
   createRequestId?: string,
   startupCommand?: StartupCommandRequest,
   runtimeModeOverride?: SshRuntimeMode,
+  recordingScopeId?: string,
 ) {
   switch (connection.type) {
     case "local_terminal":
       return invoke<string>("create_local_session", {
         connectionId: connection.id,
         createRequestId,
+        recordingScopeId,
       });
     case "telnet":
       return invoke<string>("create_telnet_session", {
         connectionId: connection.id,
         createRequestId,
+        recordingScopeId,
         startupCommand: buildStartupCommandPayload(startupCommand),
       });
     case "serial":
       return invoke<string>("create_serial_session", {
         connectionId: connection.id,
         createRequestId,
+        recordingScopeId,
       });
     case "vnc":
       return invoke<string>("create_vnc_session", {
@@ -135,6 +140,7 @@ export async function createSessionForConnection(
         createRequestId,
         startupCommand: buildStartupCommandPayload(startupCommand),
         runtimeMode: runtimeModeOverride,
+        recordingScopeId,
       });
   }
 }
@@ -143,6 +149,7 @@ export async function createTemporarySession(
   config: TemporaryLinkConfig,
   createRequestId?: string,
   startupCommand?: StartupCommandRequest,
+  recordingScopeId?: string,
 ) {
   switch (config.protocol) {
     case "telnet":
@@ -152,6 +159,7 @@ export async function createTemporarySession(
         port: config.port,
         name: config.name,
         createRequestId,
+        recordingScopeId,
         startupCommand: buildStartupCommandPayload(startupCommand),
       });
     case "serial":
@@ -161,12 +169,14 @@ export async function createTemporarySession(
         baudRate: config.baudRate,
         name: config.name,
         createRequestId,
+        recordingScopeId,
       });
     default: {
       const { protocol: _protocol, ...sshConfig } = config;
       return invoke<string>("create_temporary_ssh_session", {
         config: sshConfig,
         createRequestId,
+        recordingScopeId,
         startupCommand: buildStartupCommandPayload(startupCommand),
       });
     }
@@ -176,10 +186,12 @@ export async function createTemporarySession(
 export async function createExternalLocalSession(
   workingDir: string | null,
   createRequestId?: string,
+  recordingScopeId?: string,
 ) {
   return invoke<string>("create_local_session", {
     connectionId: null,
     createRequestId,
+    recordingScopeId,
     workingDir,
   });
 }
@@ -187,22 +199,26 @@ export async function createExternalLocalSession(
 export function createSessionForPane(
   pane: Pick<
     SessionPane,
-    "type" | "connectionId" | "temporaryConfig" | "sshRuntimeMode"
+    "id" | "type" | "connectionId" | "temporaryConfig" | "sshRuntimeMode"
   >,
   createRequestId?: string,
   startupCommand?: StartupCommandRequest,
+  workingDir?: string,
 ) {
   switch (pane.type) {
     case "Local":
       return invoke<string>("create_local_session", {
         connectionId: pane.connectionId || null,
         createRequestId,
+        recordingScopeId: pane.id,
+        ...(workingDir === undefined ? {} : { workingDir }),
       });
     case "Telnet":
       if (pane.connectionId) {
         return invoke<string>("create_telnet_session", {
           connectionId: pane.connectionId,
           createRequestId,
+          recordingScopeId: pane.id,
           startupCommand: buildStartupCommandPayload(startupCommand),
           runtimeMode: pane.sshRuntimeMode,
         });
@@ -215,6 +231,7 @@ export function createSessionForPane(
           port: pane.temporaryConfig.port,
           name: pane.temporaryConfig.name,
           createRequestId,
+          recordingScopeId: pane.id,
           startupCommand: buildStartupCommandPayload(startupCommand),
         });
       }
@@ -224,6 +241,7 @@ export function createSessionForPane(
         return invoke<string>("create_serial_session", {
           connectionId: pane.connectionId,
           createRequestId,
+          recordingScopeId: pane.id,
         });
       }
       assertMatchingTemporaryConfig(pane);
@@ -234,6 +252,7 @@ export function createSessionForPane(
           baudRate: pane.temporaryConfig.baudRate,
           name: pane.temporaryConfig.name,
           createRequestId,
+          recordingScopeId: pane.id,
         });
       }
       throw new Error("Missing Serial connection id");
@@ -254,6 +273,7 @@ export function createSessionForPane(
         return invoke<string>("create_ssh_session", {
           connectionId: pane.connectionId,
           createRequestId,
+          recordingScopeId: pane.id,
           startupCommand: buildStartupCommandPayload(startupCommand),
           runtimeMode: pane.sshRuntimeMode,
         });
@@ -264,6 +284,7 @@ export function createSessionForPane(
         return invoke<string>("create_temporary_ssh_session", {
           config: sshConfig,
           createRequestId,
+          recordingScopeId: pane.id,
           startupCommand: buildStartupCommandPayload(startupCommand),
         });
       }

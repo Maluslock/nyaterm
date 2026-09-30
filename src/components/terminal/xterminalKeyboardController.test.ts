@@ -41,7 +41,7 @@ function createHarness(
   imeRoute: XTerminalImeKeyboardRoute,
   sessionType: SessionType = "Local",
   keybindings: Record<string, string> = {},
-  options: { isMacOS?: boolean; appLocked?: boolean } = {},
+  options: { isMacOS?: boolean; appLocked?: boolean; disconnected?: boolean } = {},
 ) {
   const keyHandlerRef: {
     current: ((event: KeyboardEvent) => boolean) | null;
@@ -52,6 +52,7 @@ function createHarness(
     }),
     getSelection: vi.fn(() => ""),
     hasSelection: vi.fn(() => false),
+    clearSelection: vi.fn(),
     input: vi.fn(),
     buffer: { active: { baseY: 0, viewportY: 0 } },
     scrollToBottom: vi.fn(),
@@ -60,6 +61,9 @@ function createHarness(
   const pasteClipboard = vi.fn(async () => {});
   const sendRawInput = vi.fn(async () => {});
   const syncSuggestionsWithInputState = vi.fn();
+  const navigateCommand = vi.fn();
+  const selectCommandBlock = vi.fn();
+  const clearAll = vi.fn();
   const inputStateRef = {
     current: {
       ...createTerminalInputState(),
@@ -78,7 +82,7 @@ function createHarness(
     sessionTypeRef: { current: sessionType },
     inputStateRef,
     appLockedRef: { current: options.appLocked ?? false },
-    disconnectedRef: { current: false },
+    disconnectedRef: { current: options.disconnected ?? false },
     onDisconnectedCloseRequestedRef: { current: undefined },
     showSuggestionsRef: { current: false },
     suggestionsRef: { current: [] },
@@ -100,6 +104,10 @@ function createHarness(
     replaceInputSelection: vi.fn(),
     syncSuggestionsWithInputState,
     lastSelectionRef: { current: "" },
+    navigateCommand,
+    selectCommandBlock,
+    clearAll,
+    resetCommandNavigation: vi.fn(),
   });
 
   const keyHandler = keyHandlerRef.current;
@@ -115,7 +123,21 @@ function createHarness(
     sendRawInput,
     syncSuggestionsWithInputState,
     terminal,
+    navigateCommand,
+    selectCommandBlock,
+    clearAll,
   };
+}
+
+function shortcutEvent(key: string, code: string, options: KeyboardEventInit = {}) {
+  return new KeyboardEvent("keydown", {
+    key,
+    code,
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  });
 }
 
 beforeEach(() => {
@@ -123,6 +145,63 @@ beforeEach(() => {
 });
 
 describe("installXTerminalKeyboardController IME Backspace routing", () => {
+  it("runs custom command shortcuts through the sole keyboard handler", () => {
+    const harness = createHarness("application", "SSH", {
+      "terminal.commandNav.prev": "ctrl+alt+j",
+      "terminal.commandNav.next": "ctrl+alt+k",
+      "terminal.commandNav.select": "ctrl+alt+u",
+      "terminal.clearAll": "ctrl+alt+y",
+    });
+    for (const [key, action] of [
+      ["j", harness.navigateCommand],
+      ["k", harness.navigateCommand],
+      ["u", harness.selectCommandBlock],
+      ["y", harness.clearAll],
+    ] as const) {
+      const event = shortcutEvent(key, `Key${key.toUpperCase()}`, { altKey: true });
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(action).toHaveBeenCalled();
+    }
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(1, -1);
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(2, 1);
+  });
+
+  it("blocks command shortcuts while locked and retains copy, paste, find and clear", () => {
+    const locked = createHarness("application", "SSH", {}, { appLocked: true });
+    expect(
+      locked.keyHandler(
+        shortcutEvent("L", "KeyL", { ctrlKey: true, altKey: true, shiftKey: true }),
+      ),
+    ).toBe(false);
+    expect(locked.clearAll).not.toHaveBeenCalled();
+
+    const harness = createHarness("application", "SSH");
+    expect(harness.keyHandler(shortcutEvent("C", "KeyC", { shiftKey: true }))).toBe(false);
+    expect(harness.keyHandler(shortcutEvent("V", "KeyV", { shiftKey: true }))).toBe(false);
+    expect(harness.keyHandler(shortcutEvent("F", "KeyF", { shiftKey: true }))).toBe(false);
+    expect(harness.keyHandler(shortcutEvent("l", "KeyL"))).toBe(false);
+    expect(harness.navigateCommand).not.toHaveBeenCalled();
+    expect(harness.clearAll).not.toHaveBeenCalled();
+    expect(harness.pasteClipboard).toHaveBeenCalledOnce();
+    expect(harness.terminal.input).toHaveBeenCalledWith("\x0c", true);
+  });
+
+  it("keeps local command actions available while disconnected", () => {
+    const harness = createHarness("application", "SSH", {}, { disconnected: true });
+    for (const [event, action] of [
+      [shortcutEvent("ArrowLeft", "ArrowLeft", { shiftKey: true }), harness.navigateCommand],
+      [shortcutEvent("ArrowRight", "ArrowRight", { shiftKey: true }), harness.navigateCommand],
+      [shortcutEvent("/", "Slash", { shiftKey: true }), harness.selectCommandBlock],
+      [shortcutEvent("L", "KeyL", { altKey: true, shiftKey: true }), harness.clearAll],
+    ] as const) {
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(action).toHaveBeenCalled();
+    }
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(1, -1);
+    expect(harness.navigateCommand).toHaveBeenNthCalledWith(2, 1);
+  });
   it("swallows keyboard input before direct send paths while locked", () => {
     const harness = createHarness("application", "Local", {}, { appLocked: true });
     const event = backspaceEvent(8);
@@ -248,6 +327,28 @@ describe("installXTerminalKeyboardController IME Backspace routing", () => {
     expect(harness.keyHandler(event)).toBe(false);
     expect(event.defaultPrevented).toBe(true);
     expect(writeClipboardText).toHaveBeenCalledWith("selected output");
+  });
+
+  it("reserves the new session menu shortcut, including custom bindings", () => {
+    for (const [keybindings, key, code, shiftKey] of [
+      [{}, "O", "KeyO", true],
+      [{ "tab.openNewSessionMenu": "ctrl+alt+p" }, "p", "KeyP", false],
+    ] as const) {
+      const harness = createHarness("application", "SSH", keybindings);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        code,
+        ctrlKey: true,
+        altKey: !shiftKey,
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      expect(harness.keyHandler(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(harness.sendRawInput).not.toHaveBeenCalled();
+    }
   });
 
   it("copies a selection for plain Cmd+C on macOS", () => {

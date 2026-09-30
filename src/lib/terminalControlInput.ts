@@ -28,3 +28,18 @@ export function sendTerminalClearInput(
     terminal.focus();
   }
 }
+
+export function clearTerminalAll(
+  terminal: Terminal,
+  options: { shellRedraw?: boolean } = {},
+): void {
+  const { cursorX, cursorY } = terminal.buffer.active;
+  terminal.clearSelection();
+  terminal.clear();
+  if (options.shellRedraw) {
+    sendTerminalClearInput(terminal);
+  } else if (cursorY > 0) {
+    // Keep ConPTY's viewport cursor coordinates while discarding old output.
+    terminal.write(`\x1b[1;1H\x1b[${cursorY}L\x1b[${cursorY + 1};${cursorX + 1}H`);
+  }
+}

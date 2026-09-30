@@ -483,7 +483,7 @@ export function RdpForm({
                       <SelectItem value="text-and-files">
                         {t("dialog.rdpClipboardTextAndFiles")}
                       </SelectItem>
-                      <SelectItem value="disabled">{t("dialog.disabled")}</SelectItem>
+                      <SelectItem value="disabled">{t("dialog.rdpClipboardDisabled")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -12,7 +12,7 @@ NyaTerm 支持以下操作系统：
 - **macOS** 12+ (Intel & Apple Silicon)
 - **Linux**（Ubuntu 20.04+、Fedora 36+、Arch Linux 等）
 
-Windows 本地终端依赖系统 ConPTY，因此 Windows 10 1809（Build 17763）是最低支持版本。
+Windows 本地终端优先使用随应用分发的 Microsoft ConPTY；如果加载或创建失败，则使用系统 ConPTY。系统仍须提供 ConPTY API，因此 Windows 10 1809（Build 17763）是最低支持版本。可在“关于”中的支持信息查看实际使用的版本。
 
 ## 下载安装
 
@@ -27,6 +27,8 @@ Windows 本地终端依赖系统 ConPTY，因此 Windows 10 1809（Build 17763�
 | Linux | `.deb` / `.AppImage` |
 
 Windows 便携版解压后运行 `NyaTerm.exe` 即可。**Help → 检查更新** 与安装版共用 Cloudflare R2 更新清单和下载源，暂存更新前会强制验证 Tauri updater 签名。重启时 NyaTerm 会自动替换程序文件，并完整保留 `data/` 目录。
+
+首次升级到包含 bundled ConPTY 的便携版时，旧版更新器无法处理新增的 `conpty/` 目录。请手动下载新版便携包，替换程序文件并保留原有 `data/` 目录；之后可继续使用应用内更新。
 
 Windows 便携版直接下载：
 

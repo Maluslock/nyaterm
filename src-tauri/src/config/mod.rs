@@ -83,15 +83,16 @@ pub use quick_command::{
 pub use settings::{
     AI_REQUEST_USER_AGENT_DEFAULT, ActionLinksMatcherSettings, AgentCommandExecutionMode,
     AiAgentKind, AiApiFormat, AiBackendKind, AiCustomActionConfig, AiMode, AiModelConfigItem,
-    AiModelSource, AiPermissionMode, AiProviderCredential, AiProviderKind, AiProviderProfile,
-    AiReasoningEffort, AiSettings, AppSettings, AppearanceSettings, ClaudeCodeIntegrationSettings,
-    CodexIntegrationSettings, CodexThreadMode, DiagnosticsLogLevel, DiagnosticsSettings,
-    ExternalMcpSessionScope, ExternalMcpSettings, GeneralSettings, InteractionSettings,
-    KeywordHighlightRule, ProxySettings, RecordingSettings, RiskLevel, SearchEngine,
-    SearchSettings, SecuritySettings, TerminalColorsConfig, TerminalSettings, ThemeColorsConfig,
-    ThemeConfig, TransferSettings, TranslationSettings, ai_model_id_for_credential,
-    ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings, load_app_settings,
-    mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings, save_app_settings,
+    AiModelSource, AiPermissionMode, AiProviderApiProtocol, AiProviderCredential, AiProviderKind,
+    AiProviderProfile, AiReasoningEffort, AiSettings, AppSettings, AppearanceSettings,
+    ClaudeCodeIntegrationSettings, CodexIntegrationSettings, CodexThreadMode, DiagnosticsLogLevel,
+    DiagnosticsSettings, ExternalMcpSessionScope, ExternalMcpSettings, GeneralSettings,
+    InteractionSettings, KeywordHighlightRule, ProxySettings, RecordingSettings, RiskLevel,
+    SearchEngine, SearchSettings, SecuritySettings, TerminalColorsConfig, TerminalSettings,
+    ThemeColorsConfig, ThemeConfig, TransferSettings, TranslationSettings,
+    ai_model_id_for_credential, ai_model_id_for_provider, decrypt_ai_settings, encrypt_ai_settings,
+    load_app_settings, mask_ai_settings, merge_masked_ai_settings, normalize_ai_settings,
+    save_app_settings,
 };
 #[allow(unused_imports)]
 pub use tunnel::{

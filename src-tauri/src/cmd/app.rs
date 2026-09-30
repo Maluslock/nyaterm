@@ -110,6 +110,8 @@ pub struct AppSupportInfo {
     os: String,
     architecture: String,
     runtime: String,
+    #[cfg(windows)]
+    conpty: crate::platform::windows_conpty::LocalConptyInfo,
 }
 
 #[tauri::command]
@@ -119,6 +121,8 @@ pub fn get_support_info(state: tauri::State<'_, crate::runtime::AppRuntime>) -> 
         os: operating_system_label(),
         architecture: std::env::consts::ARCH.to_string(),
         runtime,
+        #[cfg(windows)]
+        conpty: crate::platform::windows_conpty::support_info(),
     }
 }
 

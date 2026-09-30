@@ -4,6 +4,76 @@ All notable changes to this project will be documented in this file.
 
 This changelog is inferred from release bump commits in git history (for example `chore: bump version to vX.Y.Z`) and grouped by Conventional Commit type.
 
+## [1.2.12] - 2026-09-29
+
+### Added
+
+- **pane-focus:** Add focused-pane mode and native fullscreen shortcuts while keeping inactive panes mounted for fast restoration.
+- **conpty:** Bundle Microsoft ConPTY for Windows, verify it during packaging, expose its status/version in support information, and preserve it across portable updates.
+- **terminal:** Add command navigation and clear shortcuts, including fallback handling for SSH sessions and common interactive-shell quit commands.
+- **terminal:** Route raw binary input through terminal sessions and synchronized peers, including Telnet IAC escaping for application data.
+- **file-explorer:** Add terminal-oriented context actions for paths and directories, including opening a directory in a new terminal.
+- **import:** Add confirmation for backup restore and clarify source handling in the import dialog.
+- **ai:** Refactor provider and model settings to improve provider configuration, model discovery, and reasoning-effort metadata.
+- **terminal-gutter:** Track gutter layout per session and dynamically size the line-number column.
+- **terminal:** Add a shortcut for opening the new-session menu.
+
+### Changed
+
+- **rdp-clipboard:** Negotiate file-transfer capability before advertising file clipboard formats and refine clipboard format handling.
+- **sftp:** Detect whether an interactive shell is available and prevent shell-command execution in SFTP-only sessions.
+- **terminal:** Track timestamps against lines actually written by the terminal so gutter timestamps stay aligned with output.
+- **ui:** Hide the empty-workspace logo when a custom background is active.
+- **quick-commands:** Parent categories now show only commands assigned directly to that category instead of including child-category commands.
+
+### Fixed
+
+- **terminal:** Make Clear All clear scrollback while preserving the active shell cursor/redraw behavior.
+- **zmodem:** Honor negotiated control-character escaping during uploads, improving transfers through nested SSH sessions and other control-sensitive paths.
+- **ai:** Allow keyless local provider discovery and preserve provider-default reasoning effort settings.
+- **terminal:** Restore SSH fallback command navigation and improve fallback detection for commands such as `psql \q` and `sqlite3 .quit`.
+- **local-terminal:** Use the platform default shell when opening a local terminal.
+- **windows-7:** Prepare bundled ConPTY before the Win7 Cargo build so release builds can resolve the packaged backend correctly.
+
+### Performance
+
+- **terminal:** Add output-pressure tracking and more efficient logical-line handling to reduce work during heavy output, long lines, and wrapped-line bursts.
+
+## [1.2.11] - 2026-09-22
+
+### Added
+
+- **serial:** Add drag-and-drop uploads for XMODEM, YMODEM, and ZMODEM transfers.
+- **auth:** Add reusable saved accounts with an independent password source for connection authentication.
+- **file-explorer:** Add an optional lazy-loading directory tree for large remote filesystems.
+- **ssh:** Add a host-fingerprint / known-hosts management interface.
+- **keys:** Allow copying the public key derived from a saved private key.
+- **sftp:** Add compatibility mode for servers that require more conservative SFTP session handling.
+- **file-explorer:** Add “upload folder contents” and rework SFTP copy, cut, and paste workflows.
+- **ui:** Add an OpenWrt connection icon.
+
+### Changed
+
+- **assets:** Replace OS/accelerator filtering with tag-based asset filtering.
+- **tabs:** Keep file-document tabs grouped with their related session and choose a related tab more predictably when a document closes.
+- **cloud-sync:** Increase the default sync debounce to 60 seconds and avoid unnecessary remote validation when sync settings have not meaningfully changed.
+- **terminal:** Respect application lock state across terminal focus, refresh, keyboard input, and context-menu interactions.
+
+### Fixed
+
+- **security-auth:** Invalidate cached plaintext credentials after saving or deleting secrets.
+- **terminal:** Fix local-terminal Ctrl+U behavior under IME input and allow WebAssembly/image-addon size reporting required by terminal image decoding.
+- **file-explorer:** Preserve tree focus while virtualizing large directory trees.
+- **updater:** Include the MCP sidecar in portable builds and avoid stale MCP backup collisions during updates.
+- **importer:** Tolerate unreadable WindTerm auto-login data instead of aborting the import.
+- **docker:** Support standalone Docker Compose v2 installations.
+- **known-hosts:** Stabilize known-hosts management actions.
+- **windows:** Guard local terminal creation on older Windows versions that do not support the required backend.
+- **ai:** Avoid UTF-8 truncation panics, prevent Agent commands from waiting indefinitely for interactive input, and restore the default Claude model when a request leaves it blank.
+- **telnet:** Cancel pending connection creation when a Telnet attempt is aborted.
+- **settings:** Fix production builds requiring two confirmation clicks before the settings window closes.
+- **activity-bar:** Hide the empty side area after all activity-bar items on that side are hidden.
+
 ## [1.2.10] - 2026-09-13
 
 ### Added

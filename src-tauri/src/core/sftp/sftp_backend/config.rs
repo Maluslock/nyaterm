@@ -23,6 +23,7 @@ pub(super) const SFTP_LARGE_FILE_CONCURRENCY: usize = 2;
 pub(super) const SFTP_HANDLE_RESERVE: usize = 8;
 pub(super) const SFTP_DIRECTORY_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 pub(super) const SFTP_SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const SFTP_EXEC_TIMEOUT: Duration = Duration::from_secs(60);
 pub(super) const SFTP_DIRECTORY_LIST_MAX_RETRIES: usize = 1;
 pub(super) const SFTP_CHANNEL_OPEN_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(50),

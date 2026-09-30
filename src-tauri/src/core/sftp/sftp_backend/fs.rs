@@ -93,8 +93,26 @@ impl RemoteFs for SftpBackend {
                 Err(error) => return Err(error),
             };
 
+            tracing::info!(
+                sftp_session_id = sftp.sftp_session_id(),
+                operation = "list_dir",
+                stage = "read_dir",
+                remote_path = path.display_path(),
+                "SFTP directory read started"
+            );
+            let read_started = Instant::now();
             match sftp.read_dir_bytes(path_bytes.clone()).await {
-                Ok(dir) => break (sftp, dir),
+                Ok(dir) => {
+                    tracing::info!(
+                        sftp_session_id = sftp.sftp_session_id(),
+                        operation = "list_dir",
+                        stage = "read_dir_completed",
+                        remote_path = path.display_path(),
+                        elapsed_ms = read_started.elapsed().as_millis(),
+                        "SFTP directory read completed"
+                    );
+                    break (sftp, dir);
+                }
                 Err(error) => {
                     let error = AppError::Sftp(error);
                     let should_retry = should_retry_sftp_directory_list(
@@ -196,8 +214,26 @@ impl RemoteFs for SftpBackend {
         }
 
         let _ = sftp.close().await;
+        tracing::info!(
+            sftp_session_id = sftp.sftp_session_id(),
+            operation = "list_dir",
+            stage = "resolving_identities",
+            remote_path = path.display_path(),
+            shell_available = self.shell_available,
+            entry_count = pending.len(),
+            uid_count = uid_set.len(),
+            gid_count = gid_set.len(),
+            "SFTP directory identity resolution started"
+        );
         let user_names = self.resolve_uid_names(uid_set).await;
         let group_names = self.resolve_gid_names(gid_set).await;
+        tracing::info!(
+            sftp_session_id = sftp.sftp_session_id(),
+            operation = "list_dir",
+            stage = "identities_resolved",
+            remote_path = path.display_path(),
+            "SFTP directory identity resolution completed"
+        );
         let entries = pending
             .into_iter()
             .map(

@@ -33,6 +33,15 @@ pub enum AiApiFormat {
     Responses,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProviderApiProtocol {
+    OpenaiCompatible,
+    Anthropic,
+    Gemini,
+    Ollama,
+}
+
 impl Default for AiApiFormat {
     fn default() -> Self {
         Self::ChatCompletions
@@ -126,10 +135,26 @@ pub enum AiMode {
 pub enum AiReasoningEffort {
     Auto,
     None,
+    Minimal,
     Low,
     Medium,
     High,
     XHigh,
+    Max,
+    Ultra,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiModelReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+    Ultra,
 }
 
 impl Default for AiReasoningEffort {
@@ -204,6 +229,8 @@ pub struct AiModelConfigItem {
     pub source: AiModelSource,
     #[serde(default)]
     pub last_seen_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_reasoning_efforts: Option<Vec<AiModelReasoningEffort>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,6 +321,10 @@ pub struct AiProviderCredential {
     pub id: String,
     pub name: String,
     pub provider_kind: AiProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
+    #[serde(default)]
+    pub api_protocol: Option<AiProviderApiProtocol>,
     #[serde(default)]
     pub api_format: AiApiFormat,
     #[serde(default)]
@@ -426,7 +457,7 @@ fn default_provider_profiles() -> Vec<AiProviderProfile> {
             name: "OpenAI".to_string(),
             provider_kind: AiProviderKind::Openai,
             model: "gpt-4o-mini".to_string(),
-            base_url: None,
+            base_url: Some("https://api.openai.com/v1/".to_string()),
             api_key: None,
             enabled: false,
         },
@@ -435,7 +466,7 @@ fn default_provider_profiles() -> Vec<AiProviderProfile> {
             name: "Anthropic".to_string(),
             provider_kind: AiProviderKind::Anthropic,
             model: "claude-3-haiku-20240307".to_string(),
-            base_url: None,
+            base_url: Some("https://api.anthropic.com/v1/".to_string()),
             api_key: None,
             enabled: false,
         },
@@ -444,7 +475,7 @@ fn default_provider_profiles() -> Vec<AiProviderProfile> {
             name: "Google Gemini".to_string(),
             provider_kind: AiProviderKind::Gemini,
             model: "gemini-2.0-flash".to_string(),
-            base_url: None,
+            base_url: Some("https://generativelanguage.googleapis.com/v1beta/".to_string()),
             api_key: None,
             enabled: false,
         },
@@ -453,7 +484,7 @@ fn default_provider_profiles() -> Vec<AiProviderProfile> {
             name: "DeepSeek".to_string(),
             provider_kind: AiProviderKind::Deepseek,
             model: "deepseek-chat".to_string(),
-            base_url: None,
+            base_url: Some("https://api.deepseek.com/v1/".to_string()),
             api_key: None,
             enabled: false,
         },
@@ -534,6 +565,8 @@ fn credential_from_profile(profile: &AiProviderProfile) -> AiProviderCredential 
         id: profile.id.clone(),
         name: profile.name.clone(),
         provider_kind: profile.provider_kind.clone(),
+        icon_data_url: None,
+        api_protocol: None,
         api_format: AiApiFormat::default(),
         base_url: profile.base_url.clone(),
         api_key: profile.api_key.clone(),
@@ -571,6 +604,7 @@ fn model_from_profile(profile: &AiProviderProfile) -> Option<AiModelConfigItem> 
             AiModelSource::RustGenai
         },
         last_seen_at: None,
+        supported_reasoning_efforts: None,
     })
 }
 
@@ -628,7 +662,7 @@ impl Default for AiSettings {
             .map(|item| item.id.clone());
 
         Self {
-            schema_version: 6,
+            schema_version: 7,
             enabled: true,
             context_line_limit: default_context_line_limit(),
             redaction_enabled: true,
@@ -715,7 +749,8 @@ pub fn merge_masked_ai_settings(current: &AiSettings, mut next: AiSettings) -> A
 pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
     let original = serde_json::to_string(settings).unwrap_or_default();
 
-    settings.schema_version = 6;
+    let migrating_provider_defaults = settings.schema_version < 7;
+    settings.schema_version = 7;
     if settings.request_user_agent.trim().is_empty() {
         settings.request_user_agent = default_request_user_agent();
     }
@@ -726,7 +761,9 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
         }
     }
 
-    if settings.provider_credentials.is_empty() {
+    let migrating_legacy_credentials =
+        migrating_provider_defaults && settings.provider_credentials.is_empty();
+    if migrating_legacy_credentials {
         settings.provider_credentials = settings
             .provider_profiles
             .iter()
@@ -734,13 +771,27 @@ pub fn normalize_ai_settings(settings: &mut AiSettings) -> bool {
             .collect();
     }
 
+    let defaults = default_provider_profiles();
     for credential in &mut settings.provider_credentials {
+        // Older built-in credentials relied on SDK defaults. The settings UI and
+        // direct model discovery now need an explicit address.
+        if migrating_provider_defaults
+            && credential
+                .base_url
+                .as_deref()
+                .is_none_or(|url| url.trim().is_empty())
+            && let Some(default) = defaults.iter().find(|profile| {
+                profile.id == credential.id && profile.provider_kind == credential.provider_kind
+            })
+        {
+            credential.base_url = default.base_url.clone();
+        }
         if is_builtin_ollama_provider(&credential.id, &credential.provider_kind) {
             migrate_legacy_ollama_base_url(&mut credential.base_url);
         }
     }
 
-    if settings.models.is_empty() {
+    if settings.models.is_empty() && migrating_legacy_credentials {
         let mut seen = HashSet::new();
         settings.models = settings
             .provider_profiles
@@ -977,7 +1028,7 @@ mod tests {
         settings.active_profile_id = "deepseek".to_string();
 
         assert!(normalize_ai_settings(&mut settings));
-        assert_eq!(settings.schema_version, 6);
+        assert_eq!(settings.schema_version, 7);
         assert!(!settings.provider_credentials.is_empty());
         assert!(
             settings
@@ -1030,7 +1081,7 @@ mod tests {
         );
 
         assert!(normalize_ai_settings(&mut settings));
-        assert_eq!(settings.schema_version, 6);
+        assert_eq!(settings.schema_version, 7);
         assert_eq!(
             settings.provider_credentials[0].api_format,
             AiApiFormat::ChatCompletions
@@ -1056,7 +1107,7 @@ mod tests {
 
         assert!(normalize_ai_settings(&mut settings));
 
-        assert_eq!(settings.schema_version, 6);
+        assert_eq!(settings.schema_version, 7);
         assert_eq!(settings.models[0].backend, AiBackendKind::Genai);
         assert!(!settings.codex.enabled);
     }
@@ -1073,6 +1124,7 @@ mod tests {
                 enabled: true,
                 source: AiModelSource::RustGenai,
                 last_seen_at: None,
+                supported_reasoning_efforts: None,
             }],
             ..AiSettings::default()
         };
@@ -1093,6 +1145,37 @@ mod tests {
             settings.request_user_agent.as_str(),
             AI_REQUEST_USER_AGENT_DEFAULT
         );
+    }
+
+    #[test]
+    fn normalize_backfills_legacy_addresses_once_and_keeps_custom_endpoints() {
+        let mut settings = AiSettings::default();
+        settings.schema_version = 6;
+        settings.provider_credentials[0].base_url = None;
+        settings.provider_credentials[1].base_url = Some("https://proxy.example/v1/".into());
+        assert!(normalize_ai_settings(&mut settings));
+        assert_eq!(
+            settings.provider_credentials[0].base_url.as_deref(),
+            Some("https://api.openai.com/v1/")
+        );
+        assert_eq!(
+            settings.provider_credentials[1].base_url.as_deref(),
+            Some("https://proxy.example/v1/")
+        );
+
+        settings.provider_credentials[0].base_url = None;
+        normalize_ai_settings(&mut settings);
+        assert!(settings.provider_credentials[0].base_url.is_none());
+    }
+
+    #[test]
+    fn normalize_does_not_recreate_deleted_providers_or_models() {
+        let mut settings = AiSettings::default();
+        settings.provider_credentials.clear();
+        settings.models.clear();
+        normalize_ai_settings(&mut settings);
+        assert!(settings.provider_credentials.is_empty());
+        assert!(settings.models.is_empty());
     }
 
     #[test]
@@ -1163,6 +1246,8 @@ mod tests {
                 id: "credential-openai-compatible".to_string(),
                 name: "OpenAI Compatible".to_string(),
                 provider_kind: AiProviderKind::OpenaiCompatible,
+                icon_data_url: None,
+                api_protocol: None,
                 api_format: AiApiFormat::default(),
                 base_url: Some(OLLAMA_LEGACY_DEFAULT_BASE_URL.to_string()),
                 api_key: None,
