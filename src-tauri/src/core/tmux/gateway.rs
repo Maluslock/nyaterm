@@ -257,6 +257,11 @@ impl TmuxGateway {
         data.push(b'\n');
         let _ = self.command_tx.send(SessionCommand::Write {
             data,
+            // Protocol bytes, not terminal input: tmux parses them itself, so
+            // neither the backspace remap nor the session's character encoding
+            // may touch them (a GBK session would otherwise re-encode the
+            // command line).
+            raw: true,
             automated: true,
             origin: InputOrigin::TerminalResponse,
             sensitivity: InputSensitivity::Normal,
