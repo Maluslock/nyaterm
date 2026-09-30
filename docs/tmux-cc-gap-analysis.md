@@ -84,6 +84,11 @@ cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
 
 ### 分支与上游（2026-09-30）
 
+本机没有外网出口（`.73:7897` 的 mihomo 节点也全挂），但 `.73` **直连 github 是通的**，
+所以取上游要借道：`ssh -D 127.0.0.1:1080 192.168.170.73`，然后
+`git -c http.proxy=socks5h://127.0.0.1:1080 fetch origin`（cargo 依赖用
+`CARGO_HTTP_PROXY` 同值；NuGet 会 302 到 nuget.azure.cn，curl 要带 `-L`）。
+
 已把上游 `origin/main` 合并进本分支（`b72d2f7b` → `1ef75d1bb`，42 个提交、153 个文件，
 版本号随上游到 v1.2.12），**零冲突**（重叠只有 `.gitignore`、4 个语言包、`core/mod.rs`、
 `ssh/io.rs`、`lib.rs`）。合并后新增两件事要记：
