@@ -737,8 +737,13 @@ impl NyaTermApp {
             .flatten()
             .unwrap_or_default();
         let context_menu_enabled = !session_id.is_empty()
-            && !terminal_mouse_reporting
-            && !self.settings.summary().interaction_right_click_paste;
+            && self
+                .settings
+                .summary()
+                .interaction_terminal_right_click_action
+                == nyaterm_core::TerminalRightClickAction::Menu
+            && (!terminal_mouse_reporting
+                || self.settings.summary().interaction_mouse_events_require_alt);
         let context_menu_items =
             self.terminal_context_menu_items(session_id.to_string(), context_selection, cx);
 
@@ -898,9 +903,15 @@ impl NyaTermApp {
                                 .relative()
                                 .flex_1()
                                 .min_h_0()
-                                .when(!is_disconnected && !terminal_mouse_reporting, |this| {
-                                    this.cursor_text()
-                                })
+                                .when(
+                                    !is_disconnected
+                                        && (!terminal_mouse_reporting
+                                            || self
+                                                .settings
+                                                .summary()
+                                                .interaction_mouse_events_require_alt),
+                                    |this| this.cursor_text(),
+                                )
                                 .when(
                                     is_active && self.terminal.menus.action_link_tooltip.is_some(),
                                     |this| this.cursor_pointer(),
@@ -997,12 +1008,19 @@ impl NyaTermApp {
                                                 cx.stop_propagation();
                                                 return;
                                             }
-                                            if this.settings.summary().interaction_right_click_paste
+                                            match this
+                                                .settings
+                                                .summary()
+                                                .interaction_terminal_right_click_action
                                             {
-                                                this.paste_from_clipboard(window, cx);
-                                                this.clear_terminal_selection(cx);
-                                            } else {
-                                                this.prepare_terminal_context_menu(cx);
+                                                nyaterm_core::TerminalRightClickAction::Paste => {
+                                                    this.paste_from_clipboard(window, cx);
+                                                    this.clear_terminal_selection(cx);
+                                                }
+                                                nyaterm_core::TerminalRightClickAction::Menu => {
+                                                    this.prepare_terminal_context_menu(cx);
+                                                }
+                                                nyaterm_core::TerminalRightClickAction::None => {}
                                             }
                                             cx.stop_propagation();
                                         },

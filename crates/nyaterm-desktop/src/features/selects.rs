@@ -291,6 +291,15 @@ impl NyaTermApp {
                 "internal" => self.update_transfer_editor_type("internal", cx),
                 _ => self.update_transfer_editor_type("external", cx),
             },
+            "settings.transfer.internal-editor-display" => self.update_internal_editor_display(
+                nyaterm_core::InternalEditorDisplay::from_compat_value(value),
+                cx,
+            ),
+            "settings.interaction.terminal-right-click-action" => self
+                .set_terminal_right_click_action(
+                    nyaterm_core::TerminalRightClickAction::from_compat_value(value),
+                    cx,
+                ),
             "settings.recording.default-mode" => match value {
                 "raw" => self.set_recording_default_mode(RecordingMode::Raw, cx),
                 _ => self.set_recording_default_mode(RecordingMode::Transcript, cx),

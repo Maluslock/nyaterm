@@ -298,7 +298,8 @@ impl NyaTermApp {
                 })),
             NyaMenuItem::action(t!("terminalCtx.recordingSettings"))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.shell.set_settings_active_tab(SettingsTab::Transfer);
+                    this.shell
+                        .set_settings_active_tab(SettingsTab::TerminalGeneral);
                     this.open_page(NavItem::Settings, cx);
                 }))
                 .icon("icons/settings.svg"),

@@ -455,8 +455,18 @@ impl SettingsFeatureState {
             !self.summary.interaction_allow_osc52_clipboard_write;
     }
 
-    pub(in crate::features) fn toggle_interaction_right_click_paste(&mut self) {
-        self.summary.interaction_right_click_paste = !self.summary.interaction_right_click_paste;
+    pub(in crate::features) fn set_terminal_right_click_action(
+        &mut self,
+        action: nyaterm_core::TerminalRightClickAction,
+    ) {
+        self.summary.interaction_terminal_right_click_action = action;
+        self.summary.interaction_right_click_paste =
+            action == nyaterm_core::TerminalRightClickAction::Paste;
+    }
+
+    pub(in crate::features) fn toggle_mouse_events_require_alt(&mut self) {
+        self.summary.interaction_mouse_events_require_alt =
+            !self.summary.interaction_mouse_events_require_alt;
     }
 
     pub(in crate::features) fn toggle_terminal_zoom_enabled(&mut self) {
@@ -501,8 +511,16 @@ impl SettingsFeatureState {
         self.summary.interaction_word_separators = text;
     }
 
-    pub(in crate::features) fn toggle_screen_lock_enabled(&mut self) {
-        self.summary.enable_screen_lock = !self.summary.enable_screen_lock;
+    pub(in crate::features) fn toggle_startup_lock_enabled(&mut self) {
+        self.summary.enable_startup_lock = !self.summary.enable_startup_lock;
+        self.summary.enable_screen_lock =
+            self.summary.enable_startup_lock || self.summary.enable_idle_lock;
+    }
+
+    pub(in crate::features) fn toggle_idle_lock_enabled(&mut self) {
+        self.summary.enable_idle_lock = !self.summary.enable_idle_lock;
+        self.summary.enable_screen_lock =
+            self.summary.enable_startup_lock || self.summary.enable_idle_lock;
     }
 
     pub(in crate::features) fn set_idle_lock_minutes(&mut self, value: u32) {
@@ -700,6 +718,13 @@ impl SettingsFeatureState {
 
     pub(in crate::features) fn set_transfer_editor_type(&mut self, editor_type: &str) {
         self.summary.transfer_editor_type = editor_type.to_string();
+    }
+
+    pub(in crate::features) fn set_internal_editor_display(
+        &mut self,
+        display: nyaterm_core::InternalEditorDisplay,
+    ) {
+        self.summary.transfer_internal_editor_display = display;
     }
 
     pub(in crate::features) fn adjust_transfer_internal_editor_font_size(

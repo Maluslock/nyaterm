@@ -61,7 +61,7 @@ pub(in crate::features) fn mcp_helper_status() -> McpHelperStatus {
     }
 }
 
-pub(super) fn resolve_mcp_helper() -> Result<PathBuf, String> {
+pub(in crate::features) fn resolve_mcp_helper() -> Result<PathBuf, String> {
     let debug_path = cfg!(debug_assertions)
         .then(|| std::env::var_os("PATH"))
         .flatten();

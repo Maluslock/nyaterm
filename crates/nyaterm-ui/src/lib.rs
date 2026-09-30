@@ -39,6 +39,10 @@ pub use gpui_kit::component::input::{
 pub use gpui_kit::component::kbd::Kbd as NyaKbd;
 pub use gpui_kit::component::scroll::ScrollableElement as NyaScrollable;
 pub use gpui_kit::component::scroll::ScrollbarAxis as NyaScrollbarAxis;
+pub use gpui_kit::component::slider::{
+    Slider as NyaSlider, SliderEvent as NyaSliderEvent, SliderState as NyaSliderState,
+    SliderValue as NyaSliderValue,
+};
 pub use gpui_kit::component::tag::Tag as NyaTag;
 pub use hover_card::NyaHoverCard;
 pub use input::{

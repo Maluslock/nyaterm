@@ -35,6 +35,16 @@ pub(super) fn lost_mouse_report_release_button(
     (pressed_button != Some(expected_button)).then_some(expected_button)
 }
 
+pub(super) fn mouse_report_allowed_by_alt(
+    require_alt: bool,
+    alt_pressed: bool,
+    press: bool,
+    motion: bool,
+    button_captured: bool,
+) -> bool {
+    !require_alt || alt_pressed || (!press && !motion && button_captured)
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::features) struct TerminalMouseReportRequest<'a> {
     pub session_id: &'a str,
@@ -649,7 +659,15 @@ impl NyaTermApp {
             motion,
             modifiers,
         } = report;
-        if session_id.is_empty() {
+        if session_id.is_empty()
+            || !mouse_report_allowed_by_alt(
+                self.settings.summary().interaction_mouse_events_require_alt,
+                modifiers.alt,
+                press,
+                motion,
+                self.terminal.selection.mouse_report_button.is_some(),
+            )
+        {
             return MouseReportWriteResult::NotHandled;
         }
         let disconnected = self.session.is_disconnected(session_id);

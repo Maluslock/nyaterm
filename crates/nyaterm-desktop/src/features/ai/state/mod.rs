@@ -20,6 +20,9 @@ use nyaterm_core::{
     AiCommandCard, AiMessage, AiMessageRole, AiMode, AiSession, AiSettings, truncate_preview, uuid,
 };
 
+use super::agent_management::{
+    AgentCommand, AgentEvent, AgentManagementState, AgentManagementView,
+};
 use crate::features::{
     runtime_jobs::AiAgentLoopState, runtime_jobs::AiAgentStepStatus, runtime_jobs::AiAgentStepView,
     runtime_jobs::AiChatJobOutput, runtime_jobs::AiChatWorkerEvent,
@@ -40,6 +43,7 @@ pub(in crate::features) struct AiFeatureState {
     history: AiHistoryState,
     discovery: AiDiscoveryState,
     agent: AiAgentState,
+    agent_management: AgentManagementState,
     panel: AiPanelState,
 }
 
@@ -358,6 +362,7 @@ impl AiFeatureState {
                 index: 0,
             },
             agent: AiAgentState::fresh(),
+            agent_management: AgentManagementState::new(),
             panel: AiPanelState {
                 execution_menu_open: false,
                 status: "AI settings ready".to_string(),
@@ -2200,6 +2205,28 @@ impl AiPanelState {
 
 /// Transitions that span more than one AI concern.
 impl AiFeatureState {
+    pub(in crate::features) fn agent_management_view(&self) -> &AgentManagementView {
+        self.agent_management.view()
+    }
+
+    pub(in crate::features) fn set_agent_management_error(&mut self, error: String) {
+        self.agent_management.set_error(error);
+    }
+
+    pub(in crate::features) fn submit_agent_command(&mut self, command: AgentCommand) -> bool {
+        self.agent_management.submit(command)
+    }
+
+    pub(in crate::features) fn take_agent_events(
+        &mut self,
+    ) -> Option<UnboundedReceiver<AgentEvent>> {
+        self.agent_management.take_events()
+    }
+
+    pub(in crate::features) fn apply_agent_event(&mut self, event: AgentEvent) -> Option<String> {
+        self.agent_management.apply(event)
+    }
+
     pub(in crate::features) fn clear_quote(&mut self) {
         self.chat.quoted_text = None;
         self.panel.status = "AI quote cleared".to_string();

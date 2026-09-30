@@ -97,6 +97,7 @@ impl NyaTermApp {
                 ),
                 action_focus: self.ai.settings_action_focus().clone(),
                 discovery_pending: self.ai.discovery_is_pending(),
+                agent_management: self.ai.agent_management_view().clone(),
             },
             cloud_sync: CloudSyncPresentation {
                 settings: Arc::new(self.cloud_sync.settings().clone()),
@@ -129,11 +130,18 @@ impl NyaTermApp {
                 .flatten(),
             backup_prompt,
             expanded_groups: Arc::from(
-                ["workspace", "terminal_session", "ai_group"]
-                    .into_iter()
-                    .filter(|group| self.shell.settings_group_is_expanded(group))
-                    .map(str::to_string)
-                    .collect::<Vec<_>>(),
+                [
+                    "workspace",
+                    "terminal_session",
+                    "ai_group",
+                    "transfer",
+                    "security",
+                    "sync_backup",
+                ]
+                .into_iter()
+                .filter(|group| self.shell.settings_group_is_expanded(group))
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
             ),
             section: match active_tab {
                 SettingsTab::General => SettingsSectionPresentation::General,
@@ -146,6 +154,7 @@ impl NyaTermApp {
                 SettingsTab::AiGeneral => SettingsSectionPresentation::AiGeneral,
                 SettingsTab::AiModels => SettingsSectionPresentation::AiModels,
                 SettingsTab::AiRules => SettingsSectionPresentation::AiRules,
+                SettingsTab::AiAgents => SettingsSectionPresentation::AiAgents,
                 SettingsTab::Transfer => SettingsSectionPresentation::Transfer,
                 SettingsTab::Security => SettingsSectionPresentation::Security,
                 SettingsTab::SyncBackup => SettingsSectionPresentation::SyncBackup,
