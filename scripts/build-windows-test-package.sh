@@ -39,6 +39,22 @@ SIDECAR="$REPO/src-tauri/binaries/nyaterm-mcp-$TARGET.exe"
 cd "$REPO"
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# Upstream made the ConPTY runtime a bundled resource (bundle.resources in
+# tauri.conf.json) and downloads it in `pnpm prepare:conpty` — a PowerShell
+# script, so on Linux it has to be fetched by hand. Fail loudly here instead of
+# 15 minutes into the cross build.
+CONPTY="$REPO/src-tauri/resources/windows/conpty"
+for rel in x64/conpty.dll x64/x64/OpenConsole.exe x64/arm64/OpenConsole.exe \
+           arm64/conpty.dll arm64/arm64/OpenConsole.exe; do
+  if [ ! -f "$CONPTY/$rel" ]; then
+    echo "FATAL: missing ConPTY resource $rel"
+    echo "  fetch microsoft.windows.console.conpty <version in src-tauri/conpty-package.json>"
+    echo "  from https://api.nuget.org/v3-flatcontainer/... and extract it into"
+    echo "  src-tauri/resources/windows/conpty/ (same layout as scripts/prepare-conpty.ps1)"
+    exit 1
+  fi
+done
+
 echo "== 1/4 frontend + linux sidecar =="
 env -u RUSTFLAGS pnpm build
 
@@ -80,6 +96,13 @@ echo "== 4/4 package =="
 mkdir -p "$OUT"
 cp "$EXE" "$OUT/nyaterm.exe"
 cp "$SIDECAR" "$OUT/nyaterm-mcp.exe"
+# The portable layout upstream ships is exe + sidecar + conpty resources +
+# license + flag, and the updater validates that trio before applying an update.
+rm -rf "$OUT/conpty"
+cp -R "$REPO/src-tauri/resources/windows/conpty" "$OUT/conpty"
+mkdir -p "$OUT/conpty"
+cp "$REPO/src-tauri/conpty-license/LICENSE.txt" "$OUT/conpty/LICENSE.txt"
+
 # portable.flag switches the app to self-contained mode: its own identifier (so a
 # running installed build cannot swallow the launch through single-instance), its
 # own config and logs under <exe_dir>/data, and an unshared database file. That is
@@ -94,4 +117,9 @@ cp "$SIDECAR" "$OUT/nyaterm-mcp.exe"
     python3 -c "import zipfile,os;root='nyaterm-windows-x64';z=zipfile.ZipFile('nyaterm-windows-x64.zip','w',zipfile.ZIP_DEFLATED);[z.write(os.path.join(root,n),os.path.join(root,n)) for n in sorted(os.listdir(root)) if os.path.isfile(os.path.join(root,n))];z.close()"
   fi
 )
+for rel in conpty/x64/conpty.dll conpty/x64/x64/OpenConsole.exe conpty/LICENSE.txt; do
+  [ -f "$OUT/$rel" ] || { echo "FATAL: package is missing $rel"; exit 1; }
+done
+echo "ok: package layout (exe + mcp + conpty + license + flag)"
+
 ls -l "$OUT" "$REPO/dist-windows/nyaterm-windows-x64.zip"

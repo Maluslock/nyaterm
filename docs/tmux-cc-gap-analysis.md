@@ -82,6 +82,22 @@ cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
 `capture-pane` 之类的 tmux 查询用另一个 socket，别对 app 正在用的默认 socket 跑
 `tmux kill-server`（会连带杀掉 app 的 control client）。
 
+### 分支与上游（2026-09-30）
+
+已把上游 `origin/main` 合并进本分支（`b72d2f7b` → `1ef75d1bb`，42 个提交、153 个文件，
+版本号随上游到 v1.2.12），**零冲突**（重叠只有 `.gitignore`、4 个语言包、`core/mod.rs`、
+`ssh/io.rs`、`lib.rs`）。合并后新增两件事要记：
+
+- 上游给 `SessionCommand::Write` 加了 `raw: bool`（`terminal_session/mod.rs`
+  的 `prepare_terminal_write_input`）：`raw=true` 跳过退格重映射与按会话编码转换。
+  网关写回 tmux 的控制命令行必须是 `raw: true`，否则配了 GBK 的会话会把命令重编码。
+- 上游把 ConPTY 运行时变成随包资源（`bundle.resources`），由 `pnpm prepare:conpty`
+  （PowerShell）从 NuGet 拉 `microsoft.windows.console.conpty` 并按 sha256 校验。
+  Linux 上交叉编译前要手动放好 `src-tauri/resources/windows/conpty/{x64,arm64}/…`，
+  否则 cargo 构建在 `resource path … doesn't exist` 处失败（构建脚本已加前置检查与打包拷贝）。
+- 上游 `main` 自己有 **19 个失败测试**（与并发/时序、cloud-sync 哈希、telnet 口令解析、
+  录制输出格式有关）；本分支合并后失败名单与之逐字一致，即合并没引入回归。
+
 ### 验证时的坑（都是踩过的）
 
 | 坑 | 现象 | 规矩 |
