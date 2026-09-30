@@ -130,18 +130,11 @@ impl NyaTermApp {
                 .flatten(),
             backup_prompt,
             expanded_groups: Arc::from(
-                [
-                    "workspace",
-                    "terminal_session",
-                    "ai_group",
-                    "transfer",
-                    "security",
-                    "sync_backup",
-                ]
-                .into_iter()
-                .filter(|group| self.shell.settings_group_is_expanded(group))
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
+                ["workspace", "terminal_session", "ai_group"]
+                    .into_iter()
+                    .filter(|group| self.shell.settings_group_is_expanded(group))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
             ),
             section: match active_tab {
                 SettingsTab::General => SettingsSectionPresentation::General,

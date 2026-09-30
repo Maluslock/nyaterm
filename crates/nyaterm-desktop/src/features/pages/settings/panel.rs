@@ -1100,17 +1100,22 @@ impl Render for SettingsPanel {
                                         .text_color(rgb(palette.text_dimmed))
                                         .child("·"),
                                 )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(palette.text_muted))
-                                        .child(active_group),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(palette.text_dimmed))
-                                        .child("/"),
+                                .when(
+                                    snapshot.active_tab.expandable_group_id().is_some(),
+                                    |this| {
+                                        this.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(palette.text_muted))
+                                                .child(active_group),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(palette.text_dimmed))
+                                                .child("/"),
+                                        )
+                                    },
                                 )
                                 .child(
                                     div()
@@ -1236,30 +1241,11 @@ impl SettingsPanel {
                     settings_nav_item(SettingsTab::AiRules),
                     settings_nav_item(SettingsTab::AiAgents),
                 ]),
-            NyaSettingsNavGroup::new(
-                "transfer",
-                t!("settings.groupTransfer"),
-                "icons/swap-horiz.svg",
-            )
-            .accent(palette.warning)
-            .expanded(snapshot.group_is_expanded("transfer"))
-            .item(settings_nav_item(SettingsTab::Transfer)),
-            NyaSettingsNavGroup::new(
-                "security",
-                t!("settings.groupSecurity"),
-                "icons/security.svg",
-            )
-            .accent(palette.danger)
-            .expanded(snapshot.group_is_expanded("security"))
-            .item(settings_nav_item(SettingsTab::Security)),
-            NyaSettingsNavGroup::new(
-                "sync_backup",
-                t!("settings.groupSyncBackup"),
-                "icons/sync.svg",
-            )
-            .accent(palette.success)
-            .expanded(snapshot.group_is_expanded("sync_backup"))
-            .item(settings_nav_item(SettingsTab::SyncBackup)),
+            NyaSettingsNavGroup::standalone([
+                settings_nav_item(SettingsTab::Transfer),
+                settings_nav_item(SettingsTab::Security),
+                settings_nav_item(SettingsTab::SyncBackup),
+            ]),
         ]
     }
 

@@ -224,12 +224,7 @@ impl ShellFeatureState {
                 main_mode: MainMode::Workspace,
                 settings: ShellSettingsNavigationState {
                     active_tab: SettingsTab::General,
-                    expanded_groups: HashSet::from([
-                        "workspace".to_string(),
-                        "transfer".to_string(),
-                        "security".to_string(),
-                        "sync_backup".to_string(),
-                    ]),
+                    expanded_groups: HashSet::from(["workspace".to_string()]),
                     draft_snapshot: None,
                     window: ChildWindowSlot::default(),
                     previous_left_collapsed: None,

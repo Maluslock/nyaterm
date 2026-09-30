@@ -133,9 +133,9 @@ impl SettingsTab {
             Self::AiModels => "ai.models",
             Self::AiRules => "ai.rules",
             Self::AiAgents => "ai.localAgents",
-            Self::Transfer => "settings.transfer",
-            Self::Security => "settings.security",
-            Self::SyncBackup => "settings.syncBackup",
+            Self::Transfer => "settings.groupTransfer",
+            Self::Security => "settings.groupSecurity",
+            Self::SyncBackup => "settings.groupSyncBackup",
         }
     }
 
@@ -180,9 +180,7 @@ impl SettingsTab {
             }
             Self::TerminalGeneral | Self::Search | Self::Translation => Some("terminal_session"),
             Self::AiGeneral | Self::AiModels | Self::AiRules | Self::AiAgents => Some("ai_group"),
-            Self::Transfer => Some("transfer"),
-            Self::Security => Some("security"),
-            Self::SyncBackup => Some("sync_backup"),
+            Self::Transfer | Self::Security | Self::SyncBackup => None,
         }
     }
 }
