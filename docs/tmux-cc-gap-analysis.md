@@ -84,6 +84,11 @@ cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
 
 ### 分支与上游（2026-09-30）
 
+本分支已推到 fork：**https://github.com/Maluslock/nyaterm**（分支
+`spike/tmux-cc-gateway-detection`，`main` 与上游 `1ef75d1bb` 一致）；本地 remote 名 `fork`。
+给上游发 PR 的地址：
+`https://github.com/nyakang/nyaterm/compare/main...Maluslock:nyaterm:spike/tmux-cc-gateway-detection`。
+
 本机没有外网出口（`.73:7897` 的 mihomo 节点也全挂），但 `.73` **直连 github 是通的**，
 所以取上游要借道：`ssh -D 127.0.0.1:1080 192.168.170.73`，然后
 `git -c http.proxy=socks5h://127.0.0.1:1080 fetch origin`（cargo 依赖用
