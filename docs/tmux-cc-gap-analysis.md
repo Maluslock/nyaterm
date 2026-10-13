@@ -169,3 +169,8 @@ cd src-tauri && DISPLAY=:99 ./target/debug/nyaterm \
 - `npx vitest run`：**926 passed / 145 files**；`npx tsc --noEmit` 干净；`pnpm i18n:check` 干净。
 - GUI 冒烟在本沙箱跑不了：WebKitGTK 的 webview 起不来（Tauri 窗口停在 10x10 未映射，截图全黑），
   与本次改动无关；真机验收仍走 `docs/tmux-cc-test-plan.md` + Windows 包。
+- Windows 包这一轮**没能重打**：cargo-xwin 每次都要重写自己的
+  `~/.cache/cargo-xwin/cmake/clang-cl/override.cmake`，而本沙箱只把工作目录挂成可写、
+  其余文件系统只读（`XDG_CACHE_HOME` / `HOME` 指到工作目录也没用，它会解析到 `/home/user/.cache`）。
+  前端产物已构建成功，卡在 `cargo xwin build` 的 CMake toolchain 这一步；在正常机器上跑
+  `scripts/build-windows-test-package.sh` 不受影响。
