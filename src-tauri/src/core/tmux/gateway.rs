@@ -17,10 +17,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::layout::{apply_pane_ids, mark_active, parse_layout};
-use super::protocol::{parse_line, unescape_output, TmuxNotification};
+use super::protocol::{parse_line, unescape_output_bytes, TmuxNotification};
 use super::types::{TmuxGatewayMessage, TmuxGatewaySnapshot, TmuxWindow};
 use crate::core::recording::{InputOrigin, InputSensitivity};
 use crate::core::session::{SessionCommand, SessionCommandSender};
+use crate::core::terminal_session::TerminalOutputDecoder;
 
 /// `tmux -CC` writes exactly these seven bytes, with no ST terminator.
 pub const CONTROL_MARKER: &str = "\x1bP1000p";
@@ -96,6 +97,35 @@ fn capture_end_command(pane_id: &str) -> String {
     format!("display-message -p -t {pane_id} '{CAPTURE_END_TAG}#{{pane_id}}'")
 }
 
+impl Inner {
+    /// Decode one pane chunk with the session encoding, keeping the decoder
+    /// stream state per pane.
+    fn decode_pane_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> String {
+        // Cloned because `decoders` is borrowed mutably below.
+        let encoding = self.encoding.clone();
+        self.decoders
+            .entry(pane_id.to_string())
+            .or_insert_with(|| TerminalOutputDecoder::new(&encoding))
+            .decode(bytes)
+    }
+
+    /// Decode the drained pane-output queue, dropping what decodes to nothing.
+    fn decode_pane_outputs(&mut self, raw: Vec<(String, Vec<u8>)>) -> Vec<(String, String)> {
+        let mut decoded = Vec::with_capacity(raw.len());
+        for (pane_id, bytes) in raw {
+            if bytes.is_empty() {
+                continue;
+            }
+            let text = self.decode_pane_bytes(&pane_id, &bytes);
+            if text.is_empty() {
+                continue;
+            }
+            decoded.push((pane_id, text));
+        }
+        decoded
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     active: bool,
@@ -116,8 +146,14 @@ struct Inner {
     in_block: bool,
     /// Side effects collected under the lock, performed after it is released.
     state_dirty: bool,
-    pane_outputs: Vec<(String, String)>,
+    /// Pane id -> raw output bytes, still in the session's own encoding.
+    pane_outputs: Vec<(String, Vec<u8>)>,
     outgoing: Vec<String>,
+    /// Session encoding (`UTF-8`, `GBK`, ...), used to decode pane bytes.
+    encoding: String,
+    /// Pane id -> streaming decoder, so a multi-byte character split across two
+    /// `%output` notifications is decoded as one character.
+    decoders: HashMap<String, TerminalOutputDecoder>,
     /// Whether the one-shot missing-marker probe has already been logged.
     probe_logged: bool,
     /// Pane whose screen is being captured, with the lines collected so far.
@@ -268,6 +304,21 @@ impl TmuxGateway {
         });
     }
 
+    /// Tell the gateway which encoding this session's panes write.
+    ///
+    /// tmux forwards pane bytes verbatim, so a GBK session's output has to be
+    /// decoded with GBK — otherwise every non-ASCII character becomes a
+    /// replacement character. Changing the encoding drops the per-pane
+    /// decoders, because their stream state belongs to the old one.
+    pub fn set_encoding(&self, encoding: &str) {
+        let mut inner = self.lock();
+        if inner.encoding == encoding {
+            return;
+        }
+        inner.encoding = encoding.to_string();
+        inner.decoders.clear();
+    }
+
     /// Perform collected side effects now that the gateway lock is released.
     fn flush(
         &self,
@@ -302,15 +353,33 @@ impl TmuxGateway {
             );
             self.sink.state(&snapshot);
         }
+        // One tmux burst arrives as many `%output` notifications, and a busy
+        // pane (a build log, `yes`, `tail -f`) can emit hundreds per second.
+        // Merging the runs for one pane keeps that from turning into one IPC
+        // event and one log line per notification: concatenation preserves the
+        // order xterm needs, and the aggregated line still says how much moved.
+        let mut merged: Vec<(String, String, usize, bool)> = Vec::new();
         for (pane_id, data) in pane_outputs {
             if data.is_empty() {
                 continue;
             }
+            let replay = data.starts_with(CAPTURE_CLEAR);
+            match merged.last_mut() {
+                Some(last) if last.0 == pane_id => {
+                    last.1.push_str(&data);
+                    last.2 += 1;
+                    last.3 |= replay;
+                }
+                _ => merged.push((pane_id, data, 1, replay)),
+            }
+        }
+        for (pane_id, data, chunks, replay) in merged {
             tracing::info!(
                 session_id = %self.session_id,
                 pane_id = %pane_id,
                 bytes = data.len(),
-                replay = data.starts_with("\u{1b}[2J"),
+                chunks,
+                replay,
                 "tmux pane output forwarded"
             );
             self.sink.pane_output(&TmuxPaneOutput { pane_id, data });
@@ -353,7 +422,8 @@ impl TmuxGateway {
         } else {
             None
         };
-        let pane_outputs = std::mem::take(&mut inner.pane_outputs);
+        let raw_pane_outputs = std::mem::take(&mut inner.pane_outputs);
+        let pane_outputs = inner.decode_pane_outputs(raw_pane_outputs);
         let outgoing = std::mem::take(&mut inner.outgoing);
         let replies = std::mem::take(&mut inner.replies);
         drop(inner);
@@ -799,10 +869,16 @@ fn process_response_block(inner: &mut Inner, lines: &[String], is_error: bool) {
         }
         if first.starts_with(CAPTURE_END_TAG) {
             if let Some((pane_id, captured)) = inner.capture.take() {
-                let text: Vec<String> = captured.iter().map(|line| unescape_output(line)).collect();
-                inner
-                    .pane_outputs
-                    .push((pane_id, format!("{CAPTURE_CLEAR}{}", text.join("\r\n"))));
+                let text: Vec<String> = captured
+                    .iter()
+                    .map(|line| {
+                        let bytes = unescape_output_bytes(line);
+                        inner.decode_pane_bytes(&pane_id, &bytes)
+                    })
+                    .collect();
+                let mut replay = CAPTURE_CLEAR.as_bytes().to_vec();
+                replay.extend_from_slice(text.join("\r\n").as_bytes());
+                inner.pane_outputs.push((pane_id, replay));
             }
             return;
         }
@@ -1050,7 +1126,7 @@ mod tests {
         // Captured lines arrive octal-escaped and are replayed with a clear.
         assert_eq!(
             data,
-            "\x1b[2J\x1b[Hhello \x1b[31mred\r\nsecond line"
+            b"\x1b[2J\x1b[Hhello \x1b[31mred\r\nsecond line".to_vec()
         );
     }
 
@@ -1221,6 +1297,85 @@ mod tests {
     impl TmuxGatewaySink for NullSink {
         fn state(&self, _snapshot: &TmuxGatewaySnapshot) {}
         fn pane_output(&self, _output: &TmuxPaneOutput) {}
+    }
+
+    /// Sink that keeps what was forwarded, so a test can assert the batching.
+    #[derive(Default)]
+    struct RecordingSink {
+        outputs: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl TmuxGatewaySink for RecordingSink {
+        fn state(&self, _snapshot: &TmuxGatewaySnapshot) {}
+        fn pane_output(&self, output: &TmuxPaneOutput) {
+            self.outputs
+                .lock()
+                .unwrap()
+                .push((output.pane_id.clone(), output.data.clone()));
+        }
+    }
+
+    #[test]
+    fn pane_output_is_decoded_with_the_session_encoding() {
+        let (command_tx, command_rx) = crate::core::session_command_channel("tmux-gbk-test");
+        let sink = Arc::new(RecordingSink::default());
+        let gateway = TmuxGateway::new("tmux-gbk-test".to_string(), sink.clone(), command_tx);
+
+        // tmux forwards pane bytes verbatim, so the session encoding decides how
+        // they become text: 中 is D6 D0 and 文 is CE C4 in GBK.
+        gateway.set_encoding("GBK");
+        assert!(gateway
+            .filter("\x1bP1000p%begin 1 2 3\r\n%end 1 2 3\r\n")
+            .is_none());
+        gateway.filter("%output %0 \\326\\320\\316\\304\n");
+        assert_eq!(
+            sink.outputs.lock().unwrap().clone(),
+            vec![("%0".to_string(), "中文".to_string())]
+        );
+
+        // A character split across two notifications stays intact: the per-pane
+        // decoder holds the leading byte instead of replacing both halves.
+        sink.outputs.lock().unwrap().clear();
+        gateway.filter("%output %0 \\326\n");
+        assert!(sink.outputs.lock().unwrap().is_empty());
+        gateway.filter("%output %0 \\320\n");
+        assert_eq!(
+            sink.outputs.lock().unwrap().clone(),
+            vec![("%0".to_string(), "中".to_string())]
+        );
+
+        // Switching the session encoding drops that stream state.
+        gateway.set_encoding("UTF-8");
+        sink.outputs.lock().unwrap().clear();
+        gateway.filter("%output %0 \\326\n");
+        assert!(sink.outputs.lock().unwrap().is_empty());
+        drop(command_rx);
+    }
+
+    #[test]
+    fn a_burst_of_pane_output_is_merged_per_pane() {
+        let (command_tx, command_rx) = crate::core::session_command_channel("tmux-merge-test");
+        let sink = Arc::new(RecordingSink::default());
+        let gateway = TmuxGateway::new("tmux-merge-test".to_string(), sink.clone(), command_tx);
+
+        assert!(gateway
+            .filter("\x1bP1000p%begin 1 2 3\r\n%end 1 2 3\r\n")
+            .is_none());
+        // A busy pane sends many `%output` notifications in one burst. Each one
+        // used to become its own event and its own log line; consecutive runs for
+        // one pane are now concatenated, and the order between panes is kept.
+        gateway.filter("%output %0 one\n%output %0 two\n%output %1 other\n%output %0 three\n");
+
+        let outputs = sink.outputs.lock().unwrap().clone();
+        assert_eq!(
+            outputs,
+            vec![
+                ("%0".to_string(), "onetwo".to_string()),
+                ("%1".to_string(), "other".to_string()),
+                ("%0".to_string(), "three".to_string()),
+            ]
+        );
+        drop(command_rx);
     }
 
     #[test]

@@ -102,6 +102,11 @@ impl SessionOutputCoalescer {
         .with_gateway(gateway)
     }
 
+    /// The tmux gateway this coalescer feeds, if one is attached.
+    pub fn tmux_gateway(&self) -> Option<Arc<crate::core::tmux::TmuxGateway>> {
+        self.gateway.clone()
+    }
+
     /// Attach a tmux gateway. Must be called before the coalescer is shared.
     pub fn with_gateway(self: Arc<Self>, gateway: Option<Arc<crate::core::tmux::TmuxGateway>>) -> Arc<Self> {
         match Arc::try_unwrap(self) {

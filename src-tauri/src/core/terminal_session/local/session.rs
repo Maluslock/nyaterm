@@ -607,6 +607,11 @@ fn pty_session_thread(
     let output_event = format!("terminal-output-{}", session_id);
     let output =
         SessionOutputCoalescer::for_app(app.clone(), output_event.clone(), output_control_tx);
+    // The tmux gateway decodes pane bytes itself, so it needs this session's
+    // encoding.
+    if let Some(gateway) = output.tmux_gateway() {
+        gateway.set_encoding(&encoding);
+    }
 
     let capture_processor = Arc::new(StdMutex::new(OutputCaptureProcessor::new()));
     let capture_for_reader = capture_processor.clone();

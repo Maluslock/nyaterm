@@ -115,6 +115,12 @@ function LayoutNodeView({
   if (node.kind === "leaf") {
     return (
       <TmuxPaneTerminal
+        // Keyed by the pane, not by layout position: when the pane at this
+        // position changes (kill-pane, break-pane, switching to a window with a
+        // different pane set), React must mount a fresh xterm instead of
+        // reusing the old one — otherwise the previous pane's scrollback,
+        // emulator modes and open search bar leak into the new pane.
+        key={node.pane.id ?? `leaf-${node.pane.index}`}
         sessionId={sessionId}
         pane={node.pane}
         isActive={activePaneId !== null && node.pane.id === activePaneId}
@@ -131,35 +137,15 @@ function LayoutNodeView({
     event: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>,
     childIndex: number,
   ) => {
-    if (dividerDragActive) return;
     const paneId = edgePaneId(
       node.children[childIndex - 1],
       isColumns ? "right" : "bottom",
     );
     if (!paneId) return;
     event.preventDefault();
-    dividerDragActive = true;
     const axis: SplitAxis = isColumns ? "columns" : "rows";
     const start = isColumns ? event.clientX : event.clientY;
-    let sentCells = 0;
-    const onMove = (moveEvent: PointerEvent | MouseEvent) => {
-      const current = isColumns ? moveEvent.clientX : moveEvent.clientY;
-      sentCells = onResizePane(paneId, axis, current - start, sentCells);
-    };
-    const onUp = () => {
-      dividerDragActive = false;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("mouseup", onUp);
-    };
-    // Both families are bound: engines without Pointer Events (older WebKitGTK)
-    // only send the mouse ones, and a duplicate move at the same coordinate
-    // computes a zero step, so it costs nothing.
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("mouseup", onUp);
+    startDividerDragFor(paneId, axis, start, isColumns, onResizePane);
   };
 
   return (
@@ -255,13 +241,57 @@ const COMMAND_PRESETS = [
 ];
 
 /**
- * Whether a divider drag is already running.
+ * Ends the divider drag that is currently running, if any.
  *
  * Chromium delivers `pointerdown` and `mousedown` for the same press, and older
- * WebKitGTK builds deliver only the mouse events — so both are bound and the
- * first one wins.
+ * WebKitGTK builds deliver only the mouse events — so both families are bound
+ * and the first one wins. Keeping a cleanup handle (rather than a boolean) is
+ * what makes a missed `pointerup` recoverable: releasing the button outside the
+ * webview, or alt-tabbing mid-drag, used to leave the listeners attached and the
+ * flag stuck, which blocked every later drag *and* kept resizing panes while the
+ * cursor moved with no button held.
  */
-let dividerDragActive = false;
+let endActiveDividerDrag: (() => void) | null = null;
+
+function startDividerDragFor(
+  paneId: string,
+  axis: SplitAxis,
+  start: number,
+  isColumns: boolean,
+  onResizePane: LayoutNodeProps["onResizePane"],
+) {
+  // Defensive: a drag wedged by a missed release must not outlive this one.
+  endActiveDividerDrag?.();
+
+  let sentCells = 0;
+  const onMove = (moveEvent: PointerEvent | MouseEvent) => {
+    // A move with no button held means the matching `up` never arrived.
+    if (moveEvent.buttons === 0) {
+      onUp();
+      return;
+    }
+    const current = isColumns ? moveEvent.clientX : moveEvent.clientY;
+    sentCells = onResizePane(paneId, axis, current - start, sentCells);
+  };
+  const onUp = () => {
+    endActiveDividerDrag = null;
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    window.removeEventListener("blur", onUp);
+  };
+  endActiveDividerDrag = onUp;
+
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("mouseup", onUp);
+  // A cancelled pointer (touch/pen) or a window that lost focus ends the drag.
+  window.addEventListener("pointercancel", onUp);
+  window.addEventListener("blur", onUp);
+}
 
 /** How long a tmux status-line message stays on screen. */
 const TMUX_NOTICE_TTL_MS = 6000;
@@ -280,9 +310,18 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cellMetricsRef = useRef<TmuxPaneCellMetrics | null>(null);
+  /** Last client size sent to tmux, so an unchanged size is not reported again. */
+  const lastClientSizeRef = useRef<{ width: number; height: number } | null>(
+    null,
+  );
+  /** Set by the client-size effect; lets later cell metrics trigger a report. */
+  const reportClientSizeRef = useRef<(() => void) | null>(null);
 
   const handleCellMetrics = useCallback((metrics: TmuxPaneCellMetrics) => {
     cellMetricsRef.current = metrics;
+    // Metrics can arrive after the effect's first report, which then had
+    // nothing to compute a size from — ask for one now that they exist.
+    reportClientSizeRef.current?.();
   }, []);
 
   const activeWindow: TmuxWindow | null =
@@ -404,10 +443,26 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     send(`rename-window -t ${target.id} ${name}`);
   }, [renamingWindow, send]);
 
+  const commandLineWasOpen = useRef(false);
   useEffect(() => {
-    if (commandLine === null) return;
+    if (commandLine === null) {
+      // Closing the command line unmounts its input, so nothing would hold the
+      // keyboard any more and the next keystroke would be dropped. Hand it back
+      // to the active pane.
+      if (!commandLineWasOpen.current) return;
+      commandLineWasOpen.current = false;
+      if (!activePaneId) return;
+      const pane = containerRef.current?.querySelector<HTMLElement>(
+        `[data-tmux-pane="${activePaneId}"]`,
+      );
+      pane
+        ?.querySelector<HTMLTextAreaElement>("textarea.xterm-helper-textarea")
+        ?.focus();
+      return;
+    }
+    commandLineWasOpen.current = true;
     commandInputRef.current?.focus();
-  }, [commandLine]);
+  }, [commandLine, activePaneId]);
 
   useEffect(() => {
     if (!paneMenu) return;
@@ -497,6 +552,20 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
         event.isComposing ||
         event.key === "Process" ||
         event.key === "Unidentified"
+      ) {
+        return;
+      }
+      // The view's own fields own the keyboard while they have focus: prefixed
+      // and Alt bindings were being stolen from the window-rename field, the
+      // command line and the pane's search box (the binding runs on `window` in
+      // the capture phase and preventDefaults, so the field never saw the key).
+      // xterm's hidden helper textarea is the one input that must still pass.
+      const focusTarget = event.target as HTMLElement | null;
+      if (
+        focusTarget &&
+        (focusTarget.tagName === "INPUT" ||
+          focusTarget.tagName === "TEXTAREA") &&
+        !focusTarget.classList.contains("xterm-helper-textarea")
       ) {
         return;
       }
@@ -598,6 +667,10 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
     const container = containerRef.current;
     if (!container) return;
 
+    // A new session starts from an unknown client size, so a stale value from
+    // the previous one must not suppress the first report.
+    lastClientSizeRef.current = null;
+
     let frame = 0;
     const report = () => {
       frame = 0;
@@ -612,18 +685,29 @@ export function TmuxGatewayView({ sessionId, snapshot }: TmuxGatewayViewProps) {
       const width = Math.floor(availableWidth / metrics.cellWidth);
       const height = Math.floor(container.clientHeight / metrics.cellHeight);
       if (width < 1 || height < 1) return;
+      // Every `refresh-client -C` makes tmux relayout and publish a state
+      // snapshot, which re-renders the whole view: reporting the same size
+      // again on every observer tick would be a self-inflicted storm.
+      const last = lastClientSizeRef.current;
+      if (last && last.width === width && last.height === height) return;
+      lastClientSizeRef.current = { width, height };
       void resizeTmuxClient(sessionId, width, height).catch(() => {});
     };
-
-    const observer = new ResizeObserver(() => {
+    const schedule = () => {
       if (frame) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(report);
-    });
+    };
+    // The first report usually runs before any pane has measured a cell, so
+    // metrics arriving later have to ask for one.
+    reportClientSizeRef.current = schedule;
+
+    const observer = new ResizeObserver(schedule);
     observer.observe(container);
     // A pane may have reported metrics before the observer was installed.
-    report();
+    schedule();
 
     return () => {
+      reportClientSizeRef.current = null;
       if (frame) cancelAnimationFrame(frame);
       observer.disconnect();
     };

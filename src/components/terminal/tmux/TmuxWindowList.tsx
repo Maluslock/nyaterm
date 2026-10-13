@@ -6,7 +6,7 @@
  * and nothing else — this is where the ids and sizes live, and where a window
  * that is off the edge of the strip can still be found.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TmuxGatewaySnapshot } from "@/lib/tmuxGateway";
 import { collectLayoutPanes } from "@/lib/tmuxGateway";
@@ -95,12 +95,28 @@ export function TmuxWindowList({
     setSelected(activeIndex >= 0 ? activeIndex : 0);
   }, [rows]);
 
-  const choose = (row: ListRow | undefined) => {
-    if (!row) return;
-    if (row.paneId) onSelectPane(row.windowId, row.paneId);
-    else onSelectWindow(row.windowId);
-    onClose();
-  };
+  const choose = useCallback(
+    (row: ListRow | undefined) => {
+      if (!row) return;
+      if (row.paneId) onSelectPane(row.windowId, row.paneId);
+      else onSelectWindow(row.windowId);
+      onClose();
+    },
+    [onSelectPane, onSelectWindow, onClose],
+  );
+
+  // Another client can kill a window while the list is open: without this the
+  // cursor points past the end, the highlight disappears and Enter does nothing.
+  useEffect(() => {
+    setSelected((current) => Math.min(current, Math.max(0, rows.length - 1)));
+  }, [rows.length]);
+
+  // Indexed rather than closed over `selected`, so the capture-phase listener
+  // below is not torn down and re-registered on every arrow key.
+  const chooseIndex = useCallback(
+    (index: number) => choose(rows[index]),
+    [choose, rows],
+  );
 
   return (
     <div
@@ -144,7 +160,7 @@ export function TmuxWindowList({
         rows={rows}
         selected={selected}
         onMove={setSelected}
-        onChoose={() => choose(rows[selected])}
+        onChoose={chooseIndex}
         onClose={onClose}
       />
     </div>
@@ -161,7 +177,7 @@ function WindowListKeys({
   rows: ListRow[];
   selected: number;
   onMove: (index: number) => void;
-  onChoose: () => void;
+  onChoose: (index: number) => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -183,7 +199,7 @@ function WindowListKeys({
       } else if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        onChoose();
+        onChoose(selected);
       }
     };
     window.addEventListener("keydown", onKeyDown, true);

@@ -81,7 +81,6 @@ export function TmuxPaneTerminal({
   const terminalRef = useRef<Terminal | null>(null);
   const paneIdRef = useRef<string | null>(pane.id ?? null);
   paneIdRef.current = pane.id ?? null;
-  /** Pane whose screen has already been requested, so it is asked for once. */
   /**
    * Pane whose screen has already been asked for, per terminal instance.
    *

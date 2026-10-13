@@ -121,6 +121,39 @@ describe("TmuxWindowList", () => {
     expect(onSelectWindow).toHaveBeenCalledWith("@0");
   });
 
+  it("keeps the cursor inside the list when another client removes rows", () => {
+    const onSelectPane = vi.fn();
+    const { rerender } = render(
+      <TmuxWindowList
+        snapshot={snapshot}
+        onSelectWindow={vi.fn()}
+        onSelectPane={onSelectPane}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Move to the last row, then let the list shrink underneath the cursor.
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    rerender(
+      <TmuxWindowList
+        snapshot={{
+          ...snapshot,
+          activeWindowId: "@0",
+          windows: [snapshot.windows[0]],
+        }}
+        onSelectWindow={vi.fn()}
+        onSelectPane={onSelectPane}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Without clamping the cursor points past the end and Enter does nothing.
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(onSelectPane).toHaveBeenCalledWith("@0", "%7");
+  });
+
   it("walks the list with the keyboard and closes on Escape", () => {
     const calls: unknown[] = [];
     const onClose = vi.fn();

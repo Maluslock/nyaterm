@@ -52,11 +52,15 @@ vi.mock("./TmuxPaneTerminal", () => ({
     return (
       <div
         data-testid={`pane-${pane.id ?? pane.index}`}
+        data-tmux-pane={pane.id ?? pane.index}
         onContextMenu={(event) => {
           event.preventDefault();
           onContextMenu?.(pane.id, { x: event.clientX, y: event.clientY });
         }}
-      />
+      >
+        {/* The real terminal keeps a hidden textarea for keyboard input. */}
+        <textarea className="xterm-helper-textarea" />
+      </div>
     );
   },
 }));
@@ -476,7 +480,9 @@ describe("TmuxGatewayView", () => {
     const divider = getAllByRole("separator")[0];
     fireEvent.pointerDown(divider, { clientX: 100, clientY: 40, pointerId: 1 });
     // 32px right at 8px per cell = 4 cells on the pane left of the divider.
-    fireEvent.pointerMove(window, { clientX: 132, clientY: 40 });
+    // `buttons: 1` is what a real engine reports while the button is held; a
+    // move with no button held is how a missed pointerup is detected.
+    fireEvent.pointerMove(window, { clientX: 132, clientY: 40, buttons: 1 });
     fireEvent.pointerUp(window, { clientX: 132, clientY: 40 });
 
     expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
@@ -484,6 +490,139 @@ describe("TmuxGatewayView", () => {
       command: "resize-pane -t %0 -R 4",
     });
   });
+  it("survives a pointerup that never arrives", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getAllByRole } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    const divider = getAllByRole("separator")[0];
+    fireEvent.pointerDown(divider, { clientX: 100, clientY: 40, pointerId: 1 });
+    // The button was released outside the webview: no pointerup reached us, so
+    // the next move reports no held button and must end the drag.
+    fireEvent.pointerMove(window, { clientX: 140, clientY: 40, buttons: 0 });
+    mockedInvoke.mockClear();
+    // Moving on with no button held must not keep resizing panes.
+    fireEvent.pointerMove(window, { clientX: 160, clientY: 40, buttons: 0 });
+    expect(mockedInvoke).not.toHaveBeenCalled();
+
+    // And a fresh drag still works: the stuck flag used to kill dragging until reload.
+    fireEvent.pointerDown(divider, { clientX: 100, clientY: 40, pointerId: 2 });
+    fireEvent.pointerMove(window, { clientX: 124, clientY: 40, buttons: 1 });
+    fireEvent.pointerUp(window, { clientX: 124, clientY: 40 });
+    expect(mockedInvoke).toHaveBeenCalledWith("tmux_gateway_command", {
+      sessionId: "s1",
+      command: "resize-pane -t %0 -R 3",
+    });
+  });
+
+  it("reports the client size once per distinct size", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    const ticks: Array<() => void> = [];
+    const originalObserver = window.ResizeObserver;
+    const originalFrame = window.requestAnimationFrame;
+    class CapturingResizeObserver {
+      constructor(callback: () => void) {
+        ticks.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    window.ResizeObserver =
+      CapturingResizeObserver as unknown as typeof ResizeObserver;
+    // Run the coalescing frame immediately so the assertions are synchronous.
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    }) as typeof window.requestAnimationFrame;
+
+    try {
+      mockedInvoke.mockClear();
+      const { container } = render(
+        <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+      );
+      // The ref the view observes is the pane area inside the strip wrapper.
+      const root = (container.firstChild as HTMLElement)
+        .firstElementChild as HTMLElement;
+      Object.defineProperty(root, "clientWidth", {
+        value: 800,
+        configurable: true,
+      });
+      Object.defineProperty(root, "clientHeight", {
+        value: 400,
+        configurable: true,
+      });
+
+      const resizes = () =>
+        mockedInvoke.mock.calls.filter(
+          ([command]) => command === "tmux_gateway_resize",
+        ).length;
+
+      for (const tick of ticks) tick();
+      expect(resizes()).toBe(1);
+      // The observer fires on every frame of a window resize: an unchanged size
+      // must not be re-sent, because each report relayouts tmux and publishes
+      // a snapshot.
+      for (const tick of ticks) tick();
+      expect(resizes()).toBe(1);
+
+      // A real size change is still reported.
+      Object.defineProperty(root, "clientWidth", {
+        value: 1600,
+        configurable: true,
+      });
+      for (const tick of ticks) tick();
+      expect(resizes()).toBe(2);
+    } finally {
+      window.ResizeObserver = originalObserver;
+      window.requestAnimationFrame = originalFrame;
+    }
+  });
+
+  it("keeps the prefixed bindings out of the view's own inputs", () => {
+    const mockedInvoke = vi.mocked(invoke);
+    mockedInvoke.mockClear();
+    const { getAllByTitle } = render(
+      <TmuxGatewayView sessionId="s1" snapshot={snapshot} />,
+    );
+
+    // Double-clicking a window tab (via its rename affordance) opens the field.
+    fireEvent.doubleClick(getAllByTitle("tmux.renameWindow")[0]);
+    const rename = screen.getByLabelText("tmux.renameWindow");
+    rename.focus();
+
+    fireEvent.keyDown(rename, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(rename, { key: "n" });
+
+    // `n` belongs to the field, so it must not become `next-window`.
+    expect(mockedInvoke).not.toHaveBeenCalledWith(
+      "tmux_gateway_command",
+      expect.objectContaining({ command: "next-window" }),
+    );
+  });
+
+  it("gives the keyboard back to the pane when the command line closes", () => {
+    render(<TmuxGatewayView sessionId="s1" snapshot={snapshot} />);
+
+    // Ctrl-b : opens the command line (Shift is reported before the colon).
+    fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+    fireEvent.keyDown(window, { key: ":", shiftKey: true });
+    const input = screen.getByPlaceholderText("tmux.commandPlaceholder");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // Any pane's terminal is acceptable — which pane is active is tmux's call —
+    // but the keyboard must land on one of them, not on the document.
+    const focused = document.activeElement as HTMLElement | null;
+    expect(focused?.className).toContain("xterm-helper-textarea");
+    expect(focused?.closest("[data-tmux-pane]")).not.toBeNull();
+  });
+
   it("resizes a pane from the keyboard on a focused divider", () => {
     const mockedInvoke = vi.mocked(invoke);
     mockedInvoke.mockClear();

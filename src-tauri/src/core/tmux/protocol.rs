@@ -13,7 +13,11 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TmuxNotification {
     /// `%output %<pane-id> <data>` — pane produced output.
-    Output { pane_id: String, data: String },
+    Output {
+        pane_id: String,
+        /// Raw pane bytes, still in the session's own encoding.
+        data: Vec<u8>,
+    },
     /// `%layout-change @<window-id> <layout> <visible-layout> <flags>`
     LayoutChange { window_id: String, layout: String },
     /// `%window-add @<window-id>`
@@ -59,11 +63,14 @@ pub enum TmuxNotification {
     Unhandled { name: String },
 }
 
-/// Decode `%output` escaping back into the raw byte stream, then to text.
+/// Decode `%output` escaping back into the raw byte stream.
 ///
-/// Returns a `String` because downstream consumers are Rust `String`s and
-/// xterm.js takes text; invalid UTF-8 is replaced rather than dropped.
-pub fn unescape_output(data: &str) -> String {
+/// The bytes — not text — are what tmux sent: a session that is not UTF-8 (GBK,
+/// Big5, Latin-1) writes its own encoding into the pane, and tmux passes those
+/// bytes through verbatim. Decoding here, before the session encoding is known,
+/// is what turned every non-ASCII character of such a session into a
+/// replacement character.
+pub fn unescape_output_bytes(data: &str) -> Vec<u8> {
     let bytes = data.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -87,7 +94,15 @@ pub fn unescape_output(data: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
+}
+
+/// Decode `%output` escaping all the way to text, as UTF-8.
+///
+/// Only for callers that have no session encoding to hand (tests, diagnostics):
+/// the gateway decodes the bytes with the session's encoding instead.
+pub fn unescape_output(data: &str) -> String {
+    String::from_utf8_lossy(&unescape_output_bytes(data)).into_owned()
 }
 
 fn tokens(line: &str) -> Vec<&str> {
@@ -115,7 +130,7 @@ pub fn parse_line(line: &str) -> Option<TmuxNotification> {
         };
         return Some(TmuxNotification::Output {
             pane_id: pane_id.to_string(),
-            data: unescape_output(data),
+            data: unescape_output_bytes(data),
         });
     }
     if let Some(rest) = line.strip_prefix("%extended-output ") {
@@ -124,7 +139,7 @@ pub fn parse_line(line: &str) -> Option<TmuxNotification> {
         let pane_id = head.split(' ').next().unwrap_or_default();
         return Some(TmuxNotification::Output {
             pane_id: pane_id.to_string(),
-            data: unescape_output(data),
+            data: unescape_output_bytes(data),
         });
     }
 
@@ -234,7 +249,7 @@ mod tests {
             n,
             TmuxNotification::Output {
                 pane_id: "%0".into(),
-                data: "hello".into()
+                data: "hello".as_bytes().to_vec()
             }
         );
     }
@@ -246,7 +261,7 @@ mod tests {
             n,
             TmuxNotification::Output {
                 pane_id: "%3".into(),
-                data: String::new()
+                data: Vec::new()
             }
         );
     }
@@ -258,7 +273,7 @@ mod tests {
             n,
             TmuxNotification::Output {
                 pane_id: "%1".into(),
-                data: "a b  c".into()
+                data: "a b  c".as_bytes().to_vec()
             }
         );
     }
@@ -270,7 +285,7 @@ mod tests {
             n,
             TmuxNotification::Output {
                 pane_id: "%2".into(),
-                data: "hello there".into()
+                data: "hello there".as_bytes().to_vec()
             }
         );
     }

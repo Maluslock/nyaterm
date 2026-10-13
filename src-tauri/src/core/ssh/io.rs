@@ -1249,6 +1249,12 @@ pub(super) async fn ssh_io_loop(
         .map(|state| state.inner().clone());
     let output =
         SessionOutputCoalescer::for_app(app.clone(), output_event.clone(), output_control_tx);
+    // The tmux gateway decodes pane bytes itself, so it needs this session's
+    // encoding: without it a GBK session's output becomes replacement
+    // characters.
+    if let Some(gateway) = output.tmux_gateway() {
+        gateway.set_encoding(&encoding);
+    }
     let mut output_decoder = TerminalOutputDecoder::new(&encoding);
     if let Some(notice) = initial_notice {
         output.push_owned(notice);

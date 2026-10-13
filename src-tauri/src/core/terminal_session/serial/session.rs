@@ -72,6 +72,11 @@ fn serial_session_thread(
     let closed_event = format!("session-closed-{}", session_id);
     let output =
         SessionOutputCoalescer::for_app(app.clone(), output_event.clone(), output_control_tx);
+        // The tmux gateway decodes pane bytes itself, so it needs this
+        // session's encoding.
+        if let Some(gateway) = output.tmux_gateway() {
+            gateway.set_encoding(&encoding);
+        }
     let recording_mgr: Option<Arc<RecordingManager>> = app
         .try_state::<Arc<RecordingManager>>()
         .map(|state| state.inner().clone());
